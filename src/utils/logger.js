@@ -5,19 +5,19 @@
 const isDevelopment = process.env.NODE_ENV === 'development';
 
 export const logger = {
-  info: (message: string, ...args: any[]) => {
+  info: (message, ...args) => {
     console.log(`[INFO] ${message}`, ...args);
   },
   
-  error: (message: string, ...args: any[]) => {
+  error: (message, ...args) => {
     console.error(`[ERROR] ${message}`, ...args);
   },
   
-  warn: (message: string, ...args: any[]) => {
+  warn: (message, ...args) => {
     console.warn(`[WARN] ${message}`, ...args);
   },
   
-  debug: (message: string, ...args: any[]) => {
+  debug: (message, ...args) => {
     if (isDevelopment) {
       console.debug(`[DEBUG] ${message}`, ...args);
     }

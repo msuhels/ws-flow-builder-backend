@@ -2,7 +2,7 @@
  * This is a user authentication API route demo.
  * Handle user registration, login, token management, etc.
  */
-import { Router, type Request, type Response } from 'express';
+import { Router } from 'express';
 import jwt from 'jsonwebtoken';
 
 const router = Router();
@@ -11,7 +11,7 @@ const router = Router();
  * User Login
  * POST /api/auth/login
  */
-router.post('/login', async (req: Request, res: Response): Promise<void> => {
+router.post('/login', async (req, res) => {
   try {
     const { username, password } = req.body;
 

@@ -1,4 +1,4 @@
-import { Router, type Request, type Response } from 'express';
+import { Router } from 'express';
 import { protect } from '../middleware/authMiddleware.js';
 import supabase from '../config/supabase.js';
 
@@ -8,7 +8,7 @@ const router = Router();
  * Get Dashboard Stats
  * GET /api/dashboard/stats
  */
-router.get('/stats', protect, async (req: Request, res: Response): Promise<void> => {
+router.get('/stats', protect, async (req, res) => {
   try {
     // Parallel requests for performance
     const totalFlowsPromise = supabase
@@ -52,7 +52,7 @@ router.get('/stats', protect, async (req: Request, res: Response): Promise<void>
     ]);
 
     // Aggregate delivery status
-    const deliveryStatusMap: Record<string, number> = {};
+    const deliveryStatusMap = {};
     if (statusLogs) {
       statusLogs.forEach((log) => {
         const status = log.status || 'unknown';

@@ -1,51 +1,13 @@
 import supabase from '../config/supabase.js';
 import axios from 'axios';
 
-// --- Types ---
-interface FlowContext {
-  [key: string]: any;
-}
-
-interface WebhookPayload {
-  type: 'message' | 'button_reply' | 'list_reply' | 'status' | 'media';
-  from: string; // Phone number
-  text?: string;
-  payload?: string; // Button ID or List ID
-  media?: any;
-  messageId?: string;
-  status?: string; // sent, delivered, read
-}
-
-interface Node {
-  id: string;
-  type: string;
-  properties: any;
-  connections: Connection[];
-}
-
-interface Connection {
-  targetNodeId: string;
-  condition?: string;
-  sourceHandle?: string;
-  buttonIndex?: number; // Which button leads to this connection
-}
-
-// Execution trace for debugging
-interface ExecutionTrace {
-  timestamp: string;
-  nodeId: string;
-  nodeType: string;
-  action: string;
-  details?: any;
-}
-
 // --- Engine ---
 
 export const FlowEngine = {
   /**
    * Main Entry Point for Webhooks
    */
-  async handleIncomingEvent(payload: WebhookPayload) {
+  async handleIncomingEvent(payload) {
     const { from: phoneNumber, type } = payload;
     console.log(`[FlowEngine] Event from ${phoneNumber}: ${type}`, payload);
 
@@ -76,7 +38,7 @@ export const FlowEngine = {
     }
   },
 
-  async handleStatusUpdate(payload: WebhookPayload) {
+  async handleStatusUpdate(payload) {
     if (!payload.messageId || !payload.status) return;
     
     try {
@@ -90,7 +52,7 @@ export const FlowEngine = {
     }
   },
 
-  async getSession(phoneNumber: string) {
+  async getSession(phoneNumber) {
     try {
       const { data } = await supabase
         .from('contact_sessions')
@@ -121,7 +83,7 @@ export const FlowEngine = {
     }
   },
 
-  async checkStartTriggers(phoneNumber: string, text: string) {
+  async checkStartTriggers(phoneNumber, text) {
     const cleanText = text.trim().toLowerCase();
     console.log(`[FlowEngine] Checking triggers for: "${cleanText}"`);
 
@@ -153,7 +115,7 @@ export const FlowEngine = {
     }
   },
 
-  async startFlow(phoneNumber: string, flowId: string, initialData: any = {}) {
+  async startFlow(phoneNumber, flowId, initialData = {}) {
     console.log(`[FlowEngine] Starting flow ${flowId} for ${phoneNumber}`);
     
     try {
@@ -271,7 +233,7 @@ export const FlowEngine = {
     }
   },
 
-  async processCurrentNodeInput(session: any, payload: WebhookPayload) {
+  async processCurrentNodeInput(session, payload) {
     console.log(`[FlowEngine] Processing input for session ${session.id}, node ${session.current_node_id}`);
     
     try {
@@ -296,8 +258,8 @@ export const FlowEngine = {
 
       console.log(`[FlowEngine] Current node type: ${currentNode.type}`);
 
-      let nextNodeId: string | null = null;
-      let variableUpdate: any = {};
+      let nextNodeId = null;
+      let variableUpdate = {};
 
       // Handle different node types
       if (currentNode.type === 'input') {
@@ -359,7 +321,7 @@ export const FlowEngine = {
                 
                 // Find connection for this button
                 const connection = currentNode.connections?.find(
-                  (c: Connection) => c.buttonIndex === buttonIndex
+                  (c) => c.buttonIndex === buttonIndex
                 );
                 
                 if (connection) {
@@ -394,7 +356,7 @@ export const FlowEngine = {
               if (match) {
                 const listIndex = parseInt(match[1]);
                 const connection = currentNode.connections?.find(
-                  (c: Connection) => c.buttonIndex === listIndex
+                  (c) => c.buttonIndex === listIndex
                 );
                 if (connection) {
                   nextNodeId = connection.targetNodeId;
@@ -420,7 +382,7 @@ export const FlowEngine = {
           const handle = result ? 'true' : 'false';
           
           const connection = currentNode.connections?.find(
-            (c: Connection) => c.sourceHandle === handle
+            (c) => c.sourceHandle === handle
           );
           
           if (connection) {
@@ -475,7 +437,7 @@ export const FlowEngine = {
     }
   },
 
-  async executeNode(session: any, nodeId: string, allNodes: any[]) {
+  async executeNode(session, nodeId, allNodes) {
     const node = allNodes.find(n => n.id === nodeId);
     if (!node) {
         console.error(`[FlowEngine] Node ${nodeId} not found`);
@@ -542,7 +504,7 @@ export const FlowEngine = {
               const handle = result ? 'true' : 'false';
               
               const connection = node.connections?.find(
-                (c: Connection) => c.sourceHandle === handle
+                (c) => c.sourceHandle === handle
               );
               
               if (connection) {
@@ -573,7 +535,7 @@ export const FlowEngine = {
                   if (action === 'add') {
                     currentTags = [...new Set([...currentTags, ...tags])];
                   } else if (action === 'remove') {
-                    currentTags = currentTags.filter((t: string) => !tags.includes(t));
+                    currentTags = currentTags.filter((t) => !tags.includes(t));
                   }
                   
                   await supabase
@@ -640,7 +602,7 @@ export const FlowEngine = {
     }
   },
 
-  async advanceToDefaultNext(session: any, currentNode: any, allNodes: any[]) {
+  async advanceToDefaultNext(session, currentNode, allNodes) {
       if (currentNode.connections && currentNode.connections.length > 0) {
           const nextId = currentNode.connections[0].targetNodeId;
           console.log(`[FlowEngine] Auto-advancing to: ${nextId}`);
@@ -651,11 +613,11 @@ export const FlowEngine = {
       }
   },
 
-  async advanceToNode(session: any, nextNodeId: string, allNodes: any[]) {
+  async advanceToNode(session, nextNodeId, allNodes) {
       await this.executeNode(session, nextNodeId, allNodes);
   },
 
-  async endSession(sessionId: string, status = 'completed') {
+  async endSession(sessionId, status = 'completed') {
       console.log(`[FlowEngine] Ending session ${sessionId} with status: ${status}`);
       await supabase
         .from('contact_sessions')
@@ -683,7 +645,7 @@ export const FlowEngine = {
       }
   },
 
-  interpolateVariables(text: string, context: any): string {
+  interpolateVariables(text, context) {
     if (!text) return text;
     
     // Replace {{variableName}} with actual values from context
@@ -693,7 +655,7 @@ export const FlowEngine = {
     });
   },
 
-  async sendMessage(to: string, content: any, nodeId?: string, connections?: Connection[], context?: any) {
+  async sendMessage(to, content, nodeId, connections, context) {
     console.log(`[FlowEngine] Sending message to: ${to}`);
 
     try {
@@ -715,7 +677,7 @@ export const FlowEngine = {
       const url = hasConfig ? `https://graph.facebook.com/${version}/${config.business_number_id}/messages` : '';
       
       // 2. Construct Payload
-      let payload: any = {
+      let payload = {
           messaging_product: 'whatsapp',
           recipient_type: 'individual',
           to: to,
@@ -734,7 +696,7 @@ export const FlowEngine = {
               type: 'button',
               body: { text: bodyText },
               action: {
-                  buttons: content.buttons.slice(0, 3).map((btn: any, idx: number) => ({
+                  buttons: content.buttons.slice(0, 3).map((btn, idx) => ({
                       type: 'reply',
                       reply: {
                           // CRITICAL: Include nodeId in button ID for routing
@@ -776,7 +738,7 @@ export const FlowEngine = {
                   button: this.interpolateVariables(content.buttonText || 'Select', context || {}),
                   sections: [{
                       title: this.interpolateVariables(content.sectionTitle || 'Options', context || {}),
-                      rows: content.listItems.slice(0, 10).map((item: any, idx: number) => ({
+                      rows: content.listItems.slice(0, 10).map((item, idx) => ({
                           id: `${nodeId}_list_${idx}`,
                           title: this.interpolateVariables(item.title, context || {}).substring(0, 24),
                           description: this.interpolateVariables(item.description || '', context || {}).substring(0, 72)
@@ -818,7 +780,7 @@ export const FlowEngine = {
           
           waMessageId = response.data.messages?.[0]?.id;
           console.log(`[FlowEngine] ✓ Message sent to WhatsApp, ID: ${waMessageId}`);
-        } catch (error: any) {
+        } catch (error) {
           console.error('[FlowEngine] WhatsApp API Error:', error.response?.data || error.message);
           status = 'failed';
         }
@@ -835,7 +797,7 @@ export const FlowEngine = {
           wati_message_id: waMessageId,
       });
 
-    } catch (error: any) {
+    } catch (error) {
         console.error('[FlowEngine] Send Error:', error.response?.data || error.message);
         await supabase.from('message_logs').insert({
             phone_number: to,
@@ -846,7 +808,7 @@ export const FlowEngine = {
     }
   },
   
-  async evaluateCondition(node: any, context: any): Promise<boolean> {
+  async evaluateCondition(node, context) {
     // Simple condition evaluation
     const { variable, operator, value } = node.properties;
     
@@ -874,7 +836,7 @@ export const FlowEngine = {
     }
   },
   
-  async addExecutionTrace(sessionId: string, trace: ExecutionTrace) {
+  async addExecutionTrace(sessionId, trace) {
     try {
       const { data: session } = await supabase
         .from('contact_sessions')
@@ -896,7 +858,7 @@ export const FlowEngine = {
     }
   },
   
-  async logError(phoneNumber: string, context: string, error: any) {
+  async logError(phoneNumber, context, error) {
     try {
       await supabase.from('error_logs').insert({
         phone_number: phoneNumber,

@@ -1,11 +1,12 @@
-import { Router, type Request, type Response } from 'express';
+import { Router } from 'express';
 import { protect } from '../middleware/authMiddleware.js';
 import supabase from '../config/supabase.js';
+import crypto from 'crypto';
 
 const router = Router();
 
 // Helper mapping
-const mapNode = (node: any) => ({
+const mapNode = (node) => ({
   _id: node.id,
   id: node.id,
   flowId: node.flow_id,
@@ -21,7 +22,7 @@ const mapNode = (node: any) => ({
  * Create Node (Single)
  * POST /api/nodes
  */
-router.post('/', protect, async (req: Request, res: Response): Promise<void> => {
+router.post('/', protect, async (req, res) => {
   try {
     const { flowId, type, name, position, properties, id } = req.body;
 
@@ -51,12 +52,12 @@ router.post('/', protect, async (req: Request, res: Response): Promise<void> => 
  * Update Node
  * PUT /api/nodes/:id
  */
-router.put('/:id', protect, async (req: Request, res: Response): Promise<void> => {
+router.put('/:id', protect, async (req, res) => {
   try {
     const { id } = req.params;
     const { name, type, position, properties, connections } = req.body;
 
-    const updates: any = {};
+    const updates = {};
     if (name !== undefined) updates.name = name;
     if (type !== undefined) updates.type = type;
     if (position !== undefined) updates.position = position;
@@ -83,7 +84,7 @@ router.put('/:id', protect, async (req: Request, res: Response): Promise<void> =
  * Delete Node
  * DELETE /api/nodes/:id
  */
-router.delete('/:id', protect, async (req: Request, res: Response): Promise<void> => {
+router.delete('/:id', protect, async (req, res) => {
   try {
     const { id } = req.params;
 
@@ -105,7 +106,7 @@ router.delete('/:id', protect, async (req: Request, res: Response): Promise<void
  * Batch Update Nodes (Sync Flow)
  * POST /api/nodes/batch
  */
-router.post('/batch', protect, async (req: Request, res: Response): Promise<void> => {
+router.post('/batch', protect, async (req, res) => {
   try {
     const { flowId, nodes } = req.body;
 
@@ -135,7 +136,7 @@ router.post('/batch', protect, async (req: Request, res: Response): Promise<void
     }
 
     // 2. Prepare nodes for insertion
-    const nodesToInsert = nodes.map((node: any) => ({
+    const nodesToInsert = nodes.map((node) => ({
       id: node.id || crypto.randomUUID(), // Ensure we have an ID
       flow_id: flowId,
       type: node.type,

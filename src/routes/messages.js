@@ -1,4 +1,4 @@
-import { Router, type Request, type Response } from 'express';
+import { Router } from 'express';
 import { protect } from '../middleware/authMiddleware.js';
 import supabase from '../config/supabase.js';
 import axios from 'axios';
@@ -9,7 +9,7 @@ const router = Router();
  * Send Message (Manual or Test)
  * POST /api/messages/send
  */
-router.post('/send', protect, async (req: Request, res: Response): Promise<void> => {
+router.post('/send', protect, async (req, res) => {
   try {
     const { phoneNumber, message, flowId, nodeId } = req.body;
 
@@ -30,7 +30,7 @@ router.post('/send', protect, async (req: Request, res: Response): Promise<void>
     const url = `https://graph.facebook.com/${version}/${config.business_number_id}/messages`;
 
     // 2. Prepare Payload (Cloud API Format)
-    const waPayload: any = {
+    const waPayload = {
         messaging_product: 'whatsapp',
         recipient_type: 'individual',
         to: phoneNumber,
@@ -53,7 +53,7 @@ router.post('/send', protect, async (req: Request, res: Response): Promise<void>
         waResponseId = response.data.messages?.[0]?.id;
         status = 'sent';
         
-    } catch (apiError: any) {
+    } catch (apiError) {
         console.error('WhatsApp Cloud API Error:', apiError.response?.data || apiError.message);
         status = 'failed';
     }

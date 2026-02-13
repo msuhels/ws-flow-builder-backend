@@ -10,7 +10,7 @@ export const HTTP_STATUS = {
   FORBIDDEN: 403,
   NOT_FOUND: 404,
   INTERNAL_SERVER_ERROR: 500,
-} as const;
+};
 
 export const ERROR_MESSAGES = {
   UNAUTHORIZED: 'Unauthorized access',
@@ -18,4 +18,4 @@ export const ERROR_MESSAGES = {
   NOT_FOUND: 'Resource not found',
   INTERNAL_ERROR: 'Internal server error',
   VALIDATION_ERROR: 'Validation error',
-} as const;
+};
