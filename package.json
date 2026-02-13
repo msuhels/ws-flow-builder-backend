@@ -9,6 +9,9 @@
     "build": "tsc",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
+"engines": {
+  "node": ">=22.9.0"
+},
   "dependencies": {
     "@supabase/supabase-js": "^2.93.2",
     "axios": "^1.13.5",
