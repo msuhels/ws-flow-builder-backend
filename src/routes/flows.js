@@ -1,11 +1,11 @@
-import { Router, type Request, type Response } from 'express';
+import { Router } from 'express';
 import { protect } from '../middleware/authMiddleware.js';
 import supabase from '../config/supabase.js';
 
 const router = Router();
 
 // Helper to convert snake_case to camelCase for Flow
-const mapFlow = (flow: any) => ({
+const mapFlow = (flow) => ({
   _id: flow.id, // Maintain compatibility with frontend expecting _id
   id: flow.id,
   name: flow.name,
@@ -19,7 +19,7 @@ const mapFlow = (flow: any) => ({
 });
 
 // Helper for Node mapping
-const mapNode = (node: any) => ({
+const mapNode = (node) => ({
   _id: node.id,
   id: node.id,
   flowId: node.flow_id,
@@ -35,7 +35,7 @@ const mapNode = (node: any) => ({
  * Get All Flows
  * GET /api/flows
  */
-router.get('/', protect, async (req: Request, res: Response): Promise<void> => {
+router.get('/', protect, async (req, res) => {
   try {
     const { data, error } = await supabase
       .from('flows')
@@ -56,7 +56,7 @@ router.get('/', protect, async (req: Request, res: Response): Promise<void> => {
  * Create New Flow
  * POST /api/flows
  */
-router.post('/', protect, async (req: Request, res: Response): Promise<void> => {
+router.post('/', protect, async (req, res) => {
   try {
     const { name, description, triggerType, triggerValue } = req.body;
 
@@ -84,7 +84,7 @@ router.post('/', protect, async (req: Request, res: Response): Promise<void> => 
  * Get Flow by ID
  * GET /api/flows/:id
  */
-router.get('/:id', protect, async (req: Request, res: Response): Promise<void> => {
+router.get('/:id', protect, async (req, res) => {
   try {
     const { id } = req.params;
 
@@ -149,12 +149,12 @@ router.get('/:id', protect, async (req: Request, res: Response): Promise<void> =
  * Update Flow
  * PUT /api/flows/:id
  */
-router.put('/:id', protect, async (req: Request, res: Response): Promise<void> => {
+router.put('/:id', protect, async (req, res) => {
   try {
     const { id } = req.params;
     const { name, description, triggerType, triggerValue, isActive, firstNodeId } = req.body;
 
-    const updates: any = {};
+    const updates = {};
     if (name !== undefined) updates.name = name;
     if (description !== undefined) updates.description = description;
     if (triggerType !== undefined) updates.trigger_type = triggerType;
@@ -183,7 +183,7 @@ router.put('/:id', protect, async (req: Request, res: Response): Promise<void> =
  * Delete Flow
  * DELETE /api/flows/:id
  */
-router.delete('/:id', protect, async (req: Request, res: Response): Promise<void> => {
+router.delete('/:id', protect, async (req, res) => {
   try {
     const { id } = req.params;
 

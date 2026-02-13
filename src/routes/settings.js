@@ -1,4 +1,4 @@
-import { Router, type Request, type Response } from 'express';
+import { Router } from 'express';
 import { protect } from '../middleware/authMiddleware.js';
 import supabase from '../config/supabase.js';
 import axios from 'axios';
@@ -6,7 +6,7 @@ import axios from 'axios';
 const router = Router();
 
 // Helper map
-const mapConfig = (config: any) => ({
+const mapConfig = (config) => ({
   _id: config.id,
   id: config.id,
   baseUrl: config.base_url,
@@ -21,7 +21,7 @@ const mapConfig = (config: any) => ({
  * Get API Configuration
  * GET /api/settings
  */
-router.get('/', protect, async (req: Request, res: Response): Promise<void> => {
+router.get('/', protect, async (req, res) => {
   try {
     const { data: config, error } = await supabase
       .from('api_config')
@@ -62,7 +62,7 @@ router.get('/', protect, async (req: Request, res: Response): Promise<void> => {
  * Update API Configuration
  * POST /api/settings
  */
-router.post('/', protect, async (req: Request, res: Response): Promise<void> => {
+router.post('/', protect, async (req, res) => {
   try {
     const { baseUrl, apiKey, businessNumberId } = req.body;
 
@@ -75,7 +75,7 @@ router.post('/', protect, async (req: Request, res: Response): Promise<void> => 
     if (fetchError) throw fetchError;
 
     let result;
-    const updates: any = {
+    const updates = {
       base_url: baseUrl,
       business_number_id: businessNumberId,
       updated_at: new Date().toISOString(),
@@ -128,7 +128,7 @@ router.post('/', protect, async (req: Request, res: Response): Promise<void> => 
  * Test Connection
  * POST /api/settings/test
  */
-router.post('/test', protect, async (req: Request, res: Response): Promise<void> => {
+router.post('/test', protect, async (req, res) => {
   try {
     const { baseUrl, apiKey } = req.body;
 

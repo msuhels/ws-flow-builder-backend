@@ -1,10 +1,10 @@
-import { Router, type Request, type Response } from 'express';
+import { Router } from 'express';
 import { protect } from '../middleware/authMiddleware.js';
 import supabase from '../config/supabase.js';
 
 const router = Router();
 
-const mapContact = (contact: any) => ({
+const mapContact = (contact) => ({
   _id: contact.id,
   id: contact.id,
   phoneNumber: contact.phone_number,
@@ -20,7 +20,7 @@ const mapContact = (contact: any) => ({
  * Get All Contacts
  * GET /api/contacts
  */
-router.get('/', protect, async (req: Request, res: Response): Promise<void> => {
+router.get('/', protect, async (req, res) => {
   try {
     const { search, tag, limit = 50, offset = 0 } = req.query;
     
@@ -64,7 +64,7 @@ router.get('/', protect, async (req: Request, res: Response): Promise<void> => {
  * Get Contact by ID
  * GET /api/contacts/:id
  */
-router.get('/:id', protect, async (req: Request, res: Response): Promise<void> => {
+router.get('/:id', protect, async (req, res) => {
   try {
     const { id } = req.params;
 
@@ -113,12 +113,12 @@ router.get('/:id', protect, async (req: Request, res: Response): Promise<void> =
  * Update Contact
  * PUT /api/contacts/:id
  */
-router.put('/:id', protect, async (req: Request, res: Response): Promise<void> => {
+router.put('/:id', protect, async (req, res) => {
   try {
     const { id } = req.params;
     const { name, attributes, tags } = req.body;
 
-    const updates: any = { updated_at: new Date().toISOString() };
+    const updates = { updated_at: new Date().toISOString() };
     if (name !== undefined) updates.name = name;
     if (attributes !== undefined) updates.attributes = attributes;
     if (tags !== undefined) updates.tags = tags;
@@ -143,7 +143,7 @@ router.put('/:id', protect, async (req: Request, res: Response): Promise<void> =
  * Delete Contact
  * DELETE /api/contacts/:id
  */
-router.delete('/:id', protect, async (req: Request, res: Response): Promise<void> => {
+router.delete('/:id', protect, async (req, res) => {
   try {
     const { id } = req.params;
 
@@ -165,15 +165,15 @@ router.delete('/:id', protect, async (req: Request, res: Response): Promise<void
  * Get All Unique Tags
  * GET /api/contacts/tags/list
  */
-router.get('/tags/list', protect, async (req: Request, res: Response): Promise<void> => {
+router.get('/tags/list', protect, async (req, res) => {
   try {
     const { data: contacts } = await supabase
       .from('contacts')
       .select('tags');
 
-    const allTags = new Set<string>();
+    const allTags = new Set();
     contacts?.forEach(contact => {
-      contact.tags?.forEach((tag: string) => allTags.add(tag));
+      contact.tags?.forEach((tag) => allTags.add(tag));
     });
 
     res.status(200).json({ 

@@ -1,6 +1,6 @@
 # Trae Project - Backend API
 
-Express + TypeScript backend API server.
+Express + JavaScript backend API server.
 
 ## Project Structure
 
@@ -12,16 +12,15 @@ backend/
 │   ├── middleware/      # Custom middleware
 │   ├── routes/          # API routes
 │   ├── services/        # Business logic
-│   ├── types/           # TypeScript type definitions
+│   ├── types/           # Type definitions (JSDoc)
 │   ├── utils/           # Utility functions
-│   ├── app.ts           # Express app setup
-│   └── server.ts        # Server entry point
+│   ├── app.js           # Express app setup
+│   └── server.js        # Server entry point
 ├── supabase/            # Database migrations
 ├── .env                 # Environment variables (not in git)
 ├── .env.example         # Environment variables template
 ├── nodemon.json         # Nodemon configuration
-├── package.json         # Dependencies and scripts
-└── tsconfig.json        # TypeScript configuration
+└── package.json         # Dependencies and scripts
 ```
 
 ## Prerequisites
@@ -66,11 +65,6 @@ npm run dev
 The server will run on `http://localhost:3000`.
 
 ## Production
-
-Build the project:
-```bash
-npm run build
-```
 
 Start the production server:
 ```bash
@@ -126,7 +120,6 @@ npm start
 ## Scripts
 
 - `npm run dev` - Start development server with hot reload
-- `npm run build` - Build TypeScript to JavaScript
 - `npm start` - Start production server
 - `npm test` - Run tests (not implemented yet)
 
@@ -134,8 +127,8 @@ npm start
 
 - **Runtime**: Node.js
 - **Framework**: Express.js
-- **Language**: TypeScript
+- **Language**: JavaScript (ES Modules)
 - **Database**: Supabase (PostgreSQL)
 - **Authentication**: JWT
-- **Dev Tools**: Nodemon, TSX
+- **Dev Tools**: Nodemon
 

@@ -1,11 +1,6 @@
 import jwt from 'jsonwebtoken';
-import { type Request, type Response, type NextFunction } from 'express';
 
-interface AuthRequest extends Request {
-  user?: any;
-}
-
-export const protect = (req: AuthRequest, res: Response, next: NextFunction) => {
+export const protect = (req, res, next) => {
   let token;
 
   if (

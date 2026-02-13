@@ -1,4 +1,4 @@
-import { Router, type Request, type Response } from 'express';
+import { Router } from 'express';
 import { FlowEngine } from '../services/flowEngine.js';
 import supabase from '../config/supabase.js';
 import axios from 'axios';
@@ -21,9 +21,9 @@ const DB_JSON_PATH = path.join(__dirname, '..', 'db.json');
 /**
  * Store webhook data to db.json
  */
-function storeWebhookData(data: any) {
+function storeWebhookData(data) {
   try {
-    let dbData: any = { webhooks: [] };
+    let dbData = { webhooks: [] };
     
     // Read existing data if file exists
     if (fs.existsSync(DB_JSON_PATH)) {
@@ -53,7 +53,7 @@ function storeWebhookData(data: any) {
 /**
  * Send a text message to a WhatsApp user
  */
-async function sendTextMessage(to: string, message: string) {
+async function sendTextMessage(to, message) {
   try {
     await axios.post(
       WHATSAPP_API_URL,
@@ -71,7 +71,7 @@ async function sendTextMessage(to: string, message: string) {
       }
     );
     console.log(`✅ Text message sent to ${to}`);
-  } catch (error: any) {
+  } catch (error) {
     console.error('❌ Error sending text message:', error.response?.data || error.message);
   }
 }
@@ -79,7 +79,7 @@ async function sendTextMessage(to: string, message: string) {
 /**
  * Send interactive buttons (Products and Services)
  */
-async function sendButtons(to: string) {
+async function sendButtons(to) {
   try {
     await axios.post(
       WHATSAPP_API_URL,
@@ -120,7 +120,7 @@ async function sendButtons(to: string) {
       }
     );
     console.log(`✅ Buttons sent to ${to}`);
-  } catch (error: any) {
+  } catch (error) {
     console.error('❌ Error sending buttons:', error.response?.data || error.message);
   }
 }
@@ -128,7 +128,7 @@ async function sendButtons(to: string) {
 /**
  * Send product selection buttons
  */
-async function sendProductButtons(to: string) {
+async function sendProductButtons(to) {
   try {
     await axios.post(
       WHATSAPP_API_URL,
@@ -176,7 +176,7 @@ async function sendProductButtons(to: string) {
       }
     );
     console.log(`✅ Product buttons sent to ${to}`);
-  } catch (error: any) {
+  } catch (error) {
     console.error('❌ Error sending product buttons:', error.response?.data || error.message);
   }
 }
@@ -184,7 +184,7 @@ async function sendProductButtons(to: string) {
 /**
  * Send service selection buttons
  */
-async function sendServiceButtons(to: string) {
+async function sendServiceButtons(to) {
   try {
     await axios.post(
       WHATSAPP_API_URL,
@@ -268,7 +268,7 @@ async function sendServiceButtons(to: string) {
     }, 1000);
     
     console.log(`✅ Service buttons sent to ${to}`);
-  } catch (error: any) {
+  } catch (error) {
     console.error('❌ Error sending service buttons:', error.response?.data || error.message);
   }
 }
@@ -276,7 +276,7 @@ async function sendServiceButtons(to: string) {
 /**
  * Mark message as read
  */
-async function markMessageAsRead(messageId: string) {
+async function markMessageAsRead(messageId) {
   try {
     await axios.post(
       WHATSAPP_API_URL,
@@ -303,7 +303,7 @@ const router = Router();
  * Incoming Webhook for WhatsApp Cloud API
  * POST /api/webhooks/whatsapp
  */
-router.post('/whatsapp', async (req: Request, res: Response) => {
+router.post('/whatsapp', async (req, res) => {
   try {
     const body = req.body;
     
@@ -335,7 +335,7 @@ router.post('/whatsapp', async (req: Request, res: Response) => {
               await sendButtons(from);
               
               // Also process through flow engine
-              const normalizedEvent: any = {
+              const normalizedEvent = {
                 type: 'message',
                 from: from,
                 messageId: messageId,
@@ -377,7 +377,7 @@ router.post('/whatsapp', async (req: Request, res: Response) => {
               }
               
               // Also process through flow engine
-              const normalizedEvent: any = {
+              const normalizedEvent = {
                 type: 'button_reply',
                 from: from,
                 messageId: messageId,
@@ -397,7 +397,7 @@ router.post('/whatsapp', async (req: Request, res: Response) => {
           // Handle status updates
           if (value.statuses && value.statuses.length > 0) {
             const status = value.statuses[0];
-            const normalizedEvent: any = {
+            const normalizedEvent = {
               type: 'status',
               from: status.recipient_id,
               messageId: status.id,
@@ -425,7 +425,7 @@ router.post('/whatsapp', async (req: Request, res: Response) => {
  * Get stored webhook data from db.json
  * GET /api/webhooks/data
  */
-router.get('/data', (req: Request, res: Response) => {
+router.get('/data', (req, res) => {
   try {
     if (fs.existsSync(DB_JSON_PATH)) {
       const fileContent = fs.readFileSync(DB_JSON_PATH, 'utf-8');
@@ -434,7 +434,7 @@ router.get('/data', (req: Request, res: Response) => {
     } else {
       res.status(200).json({ webhooks: [] });
     }
-  } catch (error: any) {
+  } catch (error) {
     console.error('❌ Error reading webhook data:', error);
     res.status(500).json({ 
       success: false, 
@@ -448,7 +448,7 @@ router.get('/data', (req: Request, res: Response) => {
  * Clear stored webhook data
  * DELETE /api/webhooks/data
  */
-router.delete('/data', (req: Request, res: Response) => {
+router.delete('/data', (req, res) => {
   try {
     const emptyData = { webhooks: [] };
     fs.writeFileSync(DB_JSON_PATH, JSON.stringify(emptyData, null, 2));
@@ -456,7 +456,7 @@ router.delete('/data', (req: Request, res: Response) => {
       success: true, 
       message: 'Webhook data cleared successfully' 
     });
-  } catch (error: any) {
+  } catch (error) {
     console.error('❌ Error clearing webhook data:', error);
     res.status(500).json({ 
       success: false, 
@@ -469,7 +469,7 @@ router.delete('/data', (req: Request, res: Response) => {
 /**
  * Webhook Verification (GET)
  */
-router.get('/whatsapp', (req: Request, res: Response) => {
+router.get('/whatsapp', (req, res) => {
     const mode = req.query['hub.mode'];
     const token = req.query['hub.verify_token'];
     const challenge = req.query['hub.challenge'];
@@ -493,7 +493,7 @@ router.get('/whatsapp', (req: Request, res: Response) => {
  * 
  * Triggers a specific flow directly via webhook URL
  */
-router.post('/trigger/:flowId', async (req: Request, res: Response) => {
+router.post('/trigger/:flowId', async (req, res) => {
   try {
     const { flowId } = req.params;
     const { phoneNumber, data } = req.body;
@@ -547,7 +547,7 @@ router.post('/trigger/:flowId', async (req: Request, res: Response) => {
       } : null
     });
 
-  } catch (error: any) {
+  } catch (error) {
     console.error('[Webhook Trigger] Error:', error);
     res.status(500).json({
       success: false,
@@ -562,7 +562,7 @@ router.post('/trigger/:flowId', async (req: Request, res: Response) => {
  * 
  * Simulates WhatsApp webhook payloads for testing flows locally
  */
-router.post('/test', async (req: Request, res: Response) => {
+router.post('/test', async (req, res) => {
   try {
     const { phoneNumber, type, text, buttonId, listId } = req.body;
 
@@ -574,7 +574,7 @@ router.post('/test', async (req: Request, res: Response) => {
       return;
     }
 
-    let normalizedEvent: any = {
+    let normalizedEvent = {
       from: phoneNumber,
       messageId: `test_${Date.now()}`,
     };
@@ -647,7 +647,7 @@ router.post('/test', async (req: Request, res: Response) => {
       } : null
     });
 
-  } catch (error: any) {
+  } catch (error) {
     console.error('[Webhook Test] Error:', error);
     res.status(500).json({
       success: false,
