@@ -34,7 +34,7 @@ async function getNextNode(isFirstMessage, next_node_id, phoneNumber) {
         .from('nodes')
         .select('*')
         .eq('id', '2ceffbc5-89d0-4c8b-81d1-9f8c4622d0da')
-        .single();
+        .maybeSingle();
 
       if (error) throw error;
       node = data;
@@ -44,14 +44,15 @@ async function getNextNode(isFirstMessage, next_node_id, phoneNumber) {
         .from('nodes')
         .select('*')
         .eq('previous_node_id', next_node_id)
-        .single();
+        .maybeSingle();
 
       if (error) throw error;
       node = data;
     }
 
     if (!node) {
-      throw new Error('Node not found');
+      console.log('No next node found, end of flow');
+      return null;
     }
 
     // Parse properties if it's a string
@@ -94,6 +95,78 @@ async function getNextNode(isFirstMessage, next_node_id, phoneNumber) {
           body: properties?.label || node.name || 'Hello 👋 How can I help you?'
         }
       };
+    } else if (node.type === 'http') {
+      // HTTP Request node - make API call and continue to next node
+      try {
+        const {
+          url,
+          method,
+          authType,
+          bearerToken,
+          basicUsername,
+          basicPassword,
+          apiKeyHeader,
+          apiKeyValue,
+          body,
+          headers,
+          timeout
+        } = properties;
+
+        if (url) {
+          // Parse custom headers
+          let customHeaders = {};
+          if (headers) {
+            try {
+              customHeaders = typeof headers === 'string' ? JSON.parse(headers) : headers;
+            } catch (e) {
+              console.error('Invalid headers JSON:', e);
+            }
+          }
+
+          // Setup authentication
+          if (authType === 'bearer' && bearerToken) {
+            customHeaders['Authorization'] = `Bearer ${bearerToken}`;
+          } else if (authType === 'basic' && basicUsername && basicPassword) {
+            const credentials = Buffer.from(`${basicUsername}:${basicPassword}`).toString('base64');
+            customHeaders['Authorization'] = `Basic ${credentials}`;
+          } else if (authType === 'apikey' && apiKeyHeader && apiKeyValue) {
+            customHeaders[apiKeyHeader] = apiKeyValue;
+          }
+
+          // Parse request body
+          let requestBody = null;
+          if (body && (method === 'POST' || method === 'PUT' || method === 'PATCH')) {
+            try {
+              requestBody = typeof body === 'string' ? JSON.parse(body) : body;
+            } catch (e) {
+              console.error('Invalid body JSON:', e);
+            }
+          }
+
+          // Make HTTP request
+          console.log(`🌐 Making HTTP ${method || 'GET'} request to: ${url}`);
+          const response = await axios({
+            method: method || 'GET',
+            url: url,
+            data: requestBody,
+            headers: customHeaders,
+            timeout: (timeout || 30) * 1000,
+            validateStatus: () => true // Accept any status code
+          });
+
+          console.log(`✅ HTTP request completed with status ${response.status}`);
+          return {
+            messaging_product: 'whatsapp',
+            to: phoneNumber,
+            type: 'text',
+            text: {
+              body: 'API request completed successfully. Continuing to next step...' + (response.data ? `\nResponse: ${JSON.stringify(response.data)}` : '')
+            }
+          };
+        }
+      } catch (error) {
+        console.error('❌ HTTP request failed:', error.message);
+      }
     } else {
       // Default to text message for other types
       return {
