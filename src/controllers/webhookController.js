@@ -525,7 +525,7 @@ export const handleWhatsAppWebhook = async (req, res) => {
               // });
             }
             if (messageContent) {
-              storeWebhookData(messageContent);
+              // storeWebhookData(messageContent);
               sendReply(messageContent);
             }
             // Mark message as read
