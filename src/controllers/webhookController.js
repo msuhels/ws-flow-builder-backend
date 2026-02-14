@@ -165,6 +165,14 @@ async function getNextNode(isFirstMessage, next_node_id, phoneNumber) {
           };
         }
       } catch (error) {
+        return {
+            messaging_product: 'whatsapp',
+            to: phoneNumber,
+            type: 'text',
+            text: {
+              body: 'API request failed. Please try again later.'
+            }
+          };
         console.error('❌ HTTP request failed:', error.message);
       }
     } else {
