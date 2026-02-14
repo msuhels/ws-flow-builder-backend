@@ -573,6 +573,95 @@ export const FlowEngine = {
               }
               await this.advanceToDefaultNext(session, node, allNodes);
               break;
+
+          case 'http':
+              try {
+                  const { 
+                    url, 
+                    method, 
+                    authType, 
+                    bearerToken, 
+                    basicUsername, 
+                    basicPassword,
+                    apiKeyHeader,
+                    apiKeyValue,
+                    body, 
+                    headers, 
+                    timeout,
+                    responseVariable 
+                  } = node.properties;
+                  
+                  if (url) {
+                      // Interpolate variables in URL
+                      const interpolatedUrl = this.interpolateVariables(url, session.context);
+                      
+                      // Parse custom headers
+                      let customHeaders = {};
+                      if (headers) {
+                        try {
+                          customHeaders = typeof headers === 'string' ? JSON.parse(headers) : headers;
+                        } catch (e) {
+                          console.error('[FlowEngine] Invalid headers JSON:', e);
+                        }
+                      }
+                      
+                      // Setup authentication
+                      if (authType === 'bearer' && bearerToken) {
+                        customHeaders['Authorization'] = `Bearer ${bearerToken}`;
+                      } else if (authType === 'basic' && basicUsername && basicPassword) {
+                        const credentials = Buffer.from(`${basicUsername}:${basicPassword}`).toString('base64');
+                        customHeaders['Authorization'] = `Basic ${credentials}`;
+                      } else if (authType === 'apikey' && apiKeyHeader && apiKeyValue) {
+                        customHeaders[apiKeyHeader] = apiKeyValue;
+                      }
+                      
+                      // Interpolate variables in body
+                      let requestBody = null;
+                      if (body && (method === 'POST' || method === 'PUT' || method === 'PATCH')) {
+                        const interpolatedBody = this.interpolateVariables(body, session.context);
+                        try {
+                          requestBody = typeof interpolatedBody === 'string' ? JSON.parse(interpolatedBody) : interpolatedBody;
+                        } catch (e) {
+                          console.error('[FlowEngine] Invalid body JSON:', e);
+                        }
+                      }
+                      
+                      // Make HTTP request
+                      const response = await axios({
+                        method: method || 'GET',
+                        url: interpolatedUrl,
+                        data: requestBody,
+                        headers: customHeaders,
+                        timeout: (timeout || 30) * 1000,
+                        validateStatus: () => true // Accept any status code
+                      });
+                      
+                      console.log(`[FlowEngine] ✓ HTTP ${method} request completed with status ${response.status}`);
+                      
+                      // Store response in session context if variable name provided
+                      if (responseVariable) {
+                        const responseData = {
+                          status: response.status,
+                          data: response.data,
+                          headers: response.headers
+                        };
+                        
+                        session.context[responseVariable] = responseData;
+                        
+                        // Update session context in database
+                        await supabase
+                          .from('sessions')
+                          .update({ context: session.context })
+                          .eq('id', session.id);
+                          
+                        console.log(`[FlowEngine] ✓ Response saved to variable: ${responseVariable}`);
+                      }
+                  }
+              } catch (e) {
+                console.error('[FlowEngine] HTTP request failed:', e.message);
+              }
+              await this.advanceToDefaultNext(session, node, allNodes);
+              break;
               
           case 'handoff':
               const handoffMessage = this.interpolateVariables(

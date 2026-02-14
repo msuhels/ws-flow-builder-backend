@@ -94,6 +94,71 @@ async function getNextNode(isFirstMessage, next_node_id, phoneNumber) {
           body: properties?.label || node.name || 'Hello 👋 How can I help you?'
         }
       };
+    } else if(node.type === 'http') {
+      // HTTP Request node - make API call and continue to next node
+      try {
+        const { 
+          url, 
+          method, 
+          authType, 
+          bearerToken, 
+          basicUsername, 
+          basicPassword,
+          apiKeyHeader,
+          apiKeyValue,
+          body, 
+          headers, 
+          timeout 
+        } = properties;
+        
+        if (url) {
+          // Parse custom headers
+          let customHeaders = {};
+          if (headers) {
+            try {
+              customHeaders = typeof headers === 'string' ? JSON.parse(headers) : headers;
+            } catch (e) {
+              console.error('Invalid headers JSON:', e);
+            }
+          }
+          
+          // Setup authentication
+          if (authType === 'bearer' && bearerToken) {
+            customHeaders['Authorization'] = `Bearer ${bearerToken}`;
+          } else if (authType === 'basic' && basicUsername && basicPassword) {
+            const credentials = Buffer.from(`${basicUsername}:${basicPassword}`).toString('base64');
+            customHeaders['Authorization'] = `Basic ${credentials}`;
+          } else if (authType === 'apikey' && apiKeyHeader && apiKeyValue) {
+            customHeaders[apiKeyHeader] = apiKeyValue;
+          }
+          
+          // Parse request body
+          let requestBody = null;
+          if (body && (method === 'POST' || method === 'PUT' || method === 'PATCH')) {
+            try {
+              requestBody = typeof body === 'string' ? JSON.parse(body) : body;
+            } catch (e) {
+              console.error('Invalid body JSON:', e);
+            }
+          }
+          
+          // Make HTTP request
+          console.log(`🌐 Making HTTP ${method || 'GET'} request to: ${url}`);
+          const response = await axios({
+            method: method || 'GET',
+            url: url,
+            data: requestBody,
+            headers: customHeaders,
+            timeout: (timeout || 30) * 1000,
+            validateStatus: () => true // Accept any status code
+          });
+          console.log(`📊 Response status: ${response.data}`);
+          console.log(`✅ HTTP request completed with status ${response.status}`);
+          
+        }
+      } catch (error) {
+        console.error('❌ HTTP request failed:', error.message);
+      }
     } else {
       // Default to text message for other types
       return {
@@ -423,7 +488,9 @@ async function markMessageAsRead(messageId) {
  */
 export const handleWhatsAppWebhook = async (req, res) => {
   try {
+    await getNextNode(false, '7ee893f0-f38b-41c5-84a3-d1d0179379a6', '919999999999');
     const body = req.body;
+    return res.send('send')
     // Store webhook data to db.json
     // storeWebhookData(body);
 
