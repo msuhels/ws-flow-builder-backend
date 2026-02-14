@@ -33,7 +33,7 @@ async function getNextNode(isFirstMessage, next_node_id, phoneNumber) {
       const { data, error } = await supabase
         .from('nodes')
         .select('*')
-        .eq('id', '2ceffbc5-89d0-4c8b-81d1-9f8c4622d0da')
+        .eq('id', '4d01c7af-4e22-46ba-82cb-8c710344de29')
         .maybeSingle();
 
       if (error) throw error;
