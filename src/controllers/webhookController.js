@@ -87,6 +87,7 @@ async function getNextNode(isFirstMessage, next_node_id, phoneNumber) {
     } else if (node.type === 'message') {
       // Simple text message
       return {
+        messaging_product: 'whatsapp',
         to: phoneNumber,
         type: 'text',
         text: {
@@ -96,6 +97,7 @@ async function getNextNode(isFirstMessage, next_node_id, phoneNumber) {
     } else {
       // Default to text message for other types
       return {
+        messaging_product: 'whatsapp',
         to: phoneNumber,
         type: 'text',
         text: {
@@ -107,6 +109,7 @@ async function getNextNode(isFirstMessage, next_node_id, phoneNumber) {
     console.error('Error getting next node:', error);
     // Return default message on error
     return {
+      messaging_product: 'whatsapp',
       to: phoneNumber,
       type: 'text',
       text: {
