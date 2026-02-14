@@ -65,6 +65,7 @@ async function getNextNode(isFirstMessage, next_node_id, phoneNumber) {
       const buttons = properties?.buttons || [];
 
       return {
+        messaging_product: 'whatsapp',
         to: phoneNumber,
         type: 'interactive',
         interactive: {
@@ -521,6 +522,7 @@ export const handleWhatsAppWebhook = async (req, res) => {
               // });
             }
             if (messageContent) {
+              storeWebhookData(messageContent);
               sendReply(messageContent);
             }
             // Mark message as read
