@@ -24,7 +24,7 @@ const mapNode = (node) => ({
  */
 router.post('/', protect, async (req, res) => {
   try {
-    const { flowId, type, name, position, properties, id } = req.body;
+    const { flowId, type, name, position, properties, id, previous_node_id } = req.body;
 
     const { data, error } = await supabase
       .from('nodes')
@@ -35,6 +35,7 @@ router.post('/', protect, async (req, res) => {
         name,
         position,
         properties,
+        previous_node_id: previous_node_id || null,
       })
       .select()
       .single();
@@ -55,7 +56,7 @@ router.post('/', protect, async (req, res) => {
 router.put('/:id', protect, async (req, res) => {
   try {
     const { id } = req.params;
-    const { name, type, position, properties, connections } = req.body;
+    const { name, type, position, properties, connections, previous_node_id } = req.body;
 
     const updates = {};
     if (name !== undefined) updates.name = name;
@@ -63,6 +64,7 @@ router.put('/:id', protect, async (req, res) => {
     if (position !== undefined) updates.position = position;
     if (properties !== undefined) updates.properties = properties;
     if (connections !== undefined) updates.connections = connections;
+    if (previous_node_id !== undefined) updates.previous_node_id = previous_node_id;
 
     const { data, error } = await supabase
       .from('nodes')
@@ -135,7 +137,7 @@ router.post('/batch', protect, async (req, res) => {
       return;
     }
 
-    // 2. Prepare nodes for insertion
+    // 2. Prepare nodes for insertion (without previous_node_id first)
     const nodesToInsert = nodes.map((node) => ({
       id: node.id || crypto.randomUUID(), // Ensure we have an ID
       flow_id: flowId,
@@ -144,12 +146,13 @@ router.post('/batch', protect, async (req, res) => {
       position: node.position,
       properties: node.properties || {},
       connections: node.connections || [],
+      previous_node_id: null, // Will be updated in next step
     }));
 
     console.log('[Nodes Batch] Inserting nodes:', nodesToInsert.length);
 
-    // 3. Insert new nodes
-    const { data, error: insertError } = await supabase
+    // 3. Insert new nodes (this generates node_id for each)
+    const { data: insertedNodes, error: insertError } = await supabase
       .from('nodes')
       .insert(nodesToInsert)
       .select();
@@ -159,8 +162,54 @@ router.post('/batch', protect, async (req, res) => {
       throw insertError;
     }
 
-    console.log('[Nodes Batch] Success! Inserted:', data?.length);
-    res.status(200).json({ success: true, data: data.map(mapNode) });
+    console.log('[Nodes Batch] Nodes inserted, now updating previous_node_id...');
+
+    // 4. Create a map of id -> node_id for quick lookup
+    const idToNodeIdMap = {};
+    insertedNodes.forEach(node => {
+      idToNodeIdMap[node.id] = node.node_id;
+    });
+
+    // 5. Update previous_node_id for each node
+    const updatePromises = nodes.map(async (node) => {
+      if (node.previous_node_id) {
+        let actualPreviousNodeId = node.previous_node_id;
+        
+        // Check if previous_node_id is a button ID (UUID format but not in our node map)
+        // If it's in our map, it's a node id that needs to be converted to node_id
+        if (idToNodeIdMap[node.previous_node_id]) {
+          actualPreviousNodeId = idToNodeIdMap[node.previous_node_id];
+        }
+        // Otherwise it's already a btn_id, keep it as is
+
+        console.log(`[Nodes Batch] Updating node ${node.id}: previous_node_id = ${actualPreviousNodeId}`);
+
+        const { error: updateError } = await supabase
+          .from('nodes')
+          .update({ previous_node_id: actualPreviousNodeId })
+          .eq('id', node.id);
+
+        if (updateError) {
+          console.error('[Nodes Batch] Update error for node:', node.id, updateError);
+        }
+      }
+    });
+
+    await Promise.all(updatePromises);
+
+    // 6. Fetch final updated nodes
+    const { data: finalNodes, error: fetchError } = await supabase
+      .from('nodes')
+      .select()
+      .eq('flow_id', flowId);
+
+    if (fetchError) {
+      console.error('[Nodes Batch] Fetch error:', fetchError);
+      throw fetchError;
+    }
+
+    console.log('[Nodes Batch] Success! Final nodes:', finalNodes?.length);
+    res.status(200).json({ success: true, data: finalNodes.map(mapNode) });
   } catch (error) {
     console.error('[Nodes Batch] Error:', error);
     res.status(500).json({ success: false, message: 'Server Error' });
