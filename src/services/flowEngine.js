@@ -637,24 +637,21 @@ export const FlowEngine = {
                       });
                       
                       console.log(`[FlowEngine] ✓ HTTP ${method} request completed with status ${response.status}`);
+                      console.log(`[FlowEngine] 📥 API Response:`, JSON.stringify(response.data, null, 2));
                       
                       // Store response in session context if variable name provided
                       if (responseVariable) {
-                        const responseData = {
-                          status: response.status,
-                          data: response.data,
-                          headers: response.headers
-                        };
-                        
-                        session.context[responseVariable] = responseData;
+                        // Save only the response data (not status/headers)
+                        session.context[responseVariable] = response.data;
                         
                         // Update session context in database
                         await supabase
-                          .from('sessions')
+                          .from('contact_sessions')
                           .update({ context: session.context })
                           .eq('id', session.id);
                           
                         console.log(`[FlowEngine] ✓ Response saved to variable: ${responseVariable}`);
+                        console.log(`[FlowEngine] 📦 Updated Session Context:`, JSON.stringify(session.context, null, 2));
                       }
                   }
               } catch (e) {
@@ -737,10 +734,42 @@ export const FlowEngine = {
   interpolateVariables(text, context) {
     if (!text) return text;
     
-    // Replace {{variableName}} with actual values from context
-    return text.replace(/\{\{(\w+)\}\}/g, (match, varName) => {
-      const value = context[varName];
-      return value !== undefined && value !== null ? String(value) : match;
+    console.log(`[FlowEngine] 🔄 Interpolating variables. Context keys:`, Object.keys(context));
+    
+    // Replace {{variableName}} or {{variableName.nested.path}} with actual values from context
+    return text.replace(/\{\{([\w.]+)\}\}/g, (match, varPath) => {
+      try {
+        // Split the path by dots to handle nested properties
+        const keys = varPath.split('.');
+        let value = context;
+        
+        // Traverse the nested path
+        for (const key of keys) {
+          if (value && typeof value === 'object' && key in value) {
+            value = value[key];
+          } else {
+            // Variable doesn't exist - remove the placeholder entirely
+            console.log(`[FlowEngine] ⚠️ Variable not found: ${varPath}, removing from message`);
+            return '';
+          }
+        }
+        
+        // Convert value to string, handle objects/arrays
+        if (value !== undefined && value !== null) {
+          if (typeof value === 'object') {
+            return JSON.stringify(value);
+          }
+          console.log(`[FlowEngine] ✓ Replaced {{${varPath}}} with: ${String(value)}`);
+          return String(value);
+        }
+        
+        // Variable exists but is null/undefined - remove placeholder
+        console.log(`[FlowEngine] ⚠️ Variable ${varPath} is null/undefined, removing from message`);
+        return '';
+      } catch (e) {
+        console.error('[FlowEngine] Error interpolating variable:', varPath, e);
+        return '';
+      }
     });
   },
 

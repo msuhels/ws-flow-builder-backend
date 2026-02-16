@@ -18,17 +18,102 @@ const WHATSAPP_API_URL = `https://graph.facebook.com/v22.0/${PHONE_NUMBER_ID}/me
 const DB_JSON_PATH = path.join(__dirname, '..', 'db.json');
 
 /**
+ * Interpolate variables in text
+ * Replaces {{variableName}} or {{variableName.nested.path}} with actual values from context
+ */
+function interpolateVariables(text, context) {
+  if (!text) return text;
+  
+  console.log(`🔄 Interpolating variables in text. Context keys:`, Object.keys(context));
+  
+  return text.replace(/\{\{([\w.]+)\}\}/g, (match, varPath) => {
+    try {
+      const keys = varPath.split('.');
+      let value = context;
+      
+      for (const key of keys) {
+        if (value && typeof value === 'object' && key in value) {
+          value = value[key];
+        } else {
+          // Variable doesn't exist - remove the placeholder entirely
+          console.log(`⚠️ Variable not found: ${varPath}, removing from message`);
+          return '';
+        }
+      }
+      
+      if (value !== undefined && value !== null) {
+        if (typeof value === 'object') {
+          return JSON.stringify(value);
+        }
+        console.log(`✓ Replaced {{${varPath}}} with: ${String(value)}`);
+        return String(value);
+      }
+      
+      // Variable exists but is null/undefined - remove placeholder
+      console.log(`⚠️ Variable ${varPath} is null/undefined, removing from message`);
+      return '';
+    } catch (e) {
+      console.error('Error interpolating variable:', varPath, e);
+      return '';
+    }
+  });
+}
+
+/**
+ * Find the node that contains a specific button ID
+ * @param {string} buttonId - The button ID to search for
+ * @returns {object|null} The node containing this button
+ */
+async function findNodeByButtonId(buttonId) {
+  try {
+    console.log(`🔍 Searching for node with button ID: ${buttonId}`);
+    
+    // Get all nodes
+    const { data: nodes, error } = await supabase
+      .from('nodes')
+      .select('*');
+
+    if (error) throw error;
+
+    // Search through nodes to find which one has this button
+    for (const node of nodes) {
+      const properties = typeof node.properties === 'string'
+        ? JSON.parse(node.properties)
+        : node.properties;
+
+      const buttons = properties?.buttons || [];
+      
+      // Check if this node has the button we're looking for
+      const hasButton = buttons.some(btn => btn.btn_id === buttonId);
+      
+      if (hasButton) {
+        console.log(`✅ Found button in node: ${node.id} (${node.type})`);
+        return node;
+      }
+    }
+
+    console.log(`❌ No node found with button ID: ${buttonId}`);
+    return null;
+  } catch (error) {
+    console.error('Error finding node by button ID:', error);
+    return null;
+  }
+}
+
+/**
  * Get next node and format for WhatsApp
  * @param {boolean} isFirstMessage - Whether this is the first message
- * @param {string} next_node_id - The ID to search for (node_id or btn_id)
+ * @param {string} current_node_id - The current node ID to find next from
  * @param {string} phoneNumber - The recipient phone number
+ * @param {boolean} isButtonClick - Whether this is from a button click
  * @returns {object} Formatted WhatsApp message payload
  */
-async function getNextNode(isFirstMessage, next_node_id, phoneNumber) {
+async function getNextNode(isFirstMessage, current_node_id, phoneNumber, isButtonClick = false) {
   try {
     let node;
 
     if (isFirstMessage) {
+      console.log(`🚀 Starting flow - fetching first node`);
       // Get the first node with specific ID
       const { data, error } = await supabase
         .from('nodes')
@@ -38,21 +123,220 @@ async function getNextNode(isFirstMessage, next_node_id, phoneNumber) {
 
       if (error) throw error;
       node = data;
-    } else {
-      // Search for node where previous_node_id matches the next_node_id
-      const { data, error } = await supabase
+      
+      // Create a new session for this flow
+      if (node) {
+        console.log(`📝 Creating new session for phone: ${phoneNumber}`);
+        
+        // First, get or create contact
+        const { data: existingContact } = await supabase
+          .from('contacts')
+          .select('*')
+          .eq('phone_number', phoneNumber)
+          .maybeSingle();
+        
+        let contactId = existingContact?.id;
+        
+        if (!existingContact) {
+          const { data: newContact } = await supabase
+            .from('contacts')
+            .insert({
+              phone_number: phoneNumber,
+              last_interaction_at: new Date().toISOString()
+            })
+            .select()
+            .single();
+          contactId = newContact?.id;
+          console.log(`✅ Created new contact: ${contactId}`);
+        }
+        
+        // Create session
+        const { data: newSession, error: sessionError } = await supabase
+          .from('contact_sessions')
+          .insert({
+            contact_id: contactId,
+            phone_number: phoneNumber,
+            flow_id: node.flow_id,
+            current_node_id: node.id,
+            status: 'active',
+            context: {},
+            last_interaction_at: new Date().toISOString()
+          })
+          .select()
+          .single();
+        
+        if (sessionError) {
+          console.error(`❌ Error creating session:`, sessionError);
+        } else {
+          console.log(`✅ Session created: ${newSession.id}`);
+        }
+      }
+    } else if (isButtonClick) {
+      // If this is a button click, find the node that contains this button
+      console.log(`🔘 Button clicked with ID: ${current_node_id}`);
+      const nodeWithButton = await findNodeByButtonId(current_node_id);
+      
+      if (!nodeWithButton) {
+        console.log(`❌ Could not find node with button ID: ${current_node_id}`);
+        return null;
+      }
+
+      // Now get the next node from this node's connections
+      const connections = nodeWithButton.connections || [];
+      
+      if (connections.length === 0) {
+        console.log(`⚠️ No connections found for node: ${nodeWithButton.id}`);
+        return null;
+      }
+
+      // Find which button was clicked
+      const properties = typeof nodeWithButton.properties === 'string'
+        ? JSON.parse(nodeWithButton.properties)
+        : nodeWithButton.properties;
+      
+      const buttons = properties?.buttons || [];
+      const clickedButtonIndex = buttons.findIndex(btn => btn.btn_id === current_node_id);
+      
+      console.log(`🔘 Clicked button index: ${clickedButtonIndex} (out of ${buttons.length} buttons)`);
+      
+      if (clickedButtonIndex === -1) {
+        console.log(`❌ Could not find which button was clicked with ID: ${current_node_id}`);
+        return null;
+      }
+
+      // Find the connection that matches this button index
+      // Use the LAST matching connection (most recent) in case there are duplicates
+      const matchingConnections = connections.filter(conn => conn.buttonIndex === clickedButtonIndex);
+      
+      if (matchingConnections.length === 0) {
+        console.log(`❌ No connection found for button index: ${clickedButtonIndex}`);
+        console.log(`Available connections:`, connections.map(c => `button ${c.buttonIndex} -> ${c.targetNodeId.substring(0, 8)}...`));
+        return null;
+      }
+
+      const matchingConnection = matchingConnections[matchingConnections.length - 1]; // Take the last one
+      console.log(`✅ Found ${matchingConnections.length} connection(s) for button ${clickedButtonIndex}, using the most recent one`);
+
+      const nextNodeId = matchingConnection.targetNodeId;
+      console.log(`🔗 Moving from button ${clickedButtonIndex} of node ${nodeWithButton.id} to ${nextNodeId}`);
+
+      // Debug: Check if this node exists
+      const { data: checkNode, error: checkError } = await supabase
+        .from('nodes')
+        .select('id, name, type, flow_id')
+        .eq('id', nextNodeId)
+        .maybeSingle();
+      
+      console.log(`🔍 Checking if node ${nextNodeId} exists:`, checkNode ? `YES - ${checkNode.type} "${checkNode.name}"` : 'NO');
+      
+      if (!checkNode) {
+        // List all nodes to help debug
+        const { data: allNodes } = await supabase
+          .from('nodes')
+          .select('id, name, type, flow_id')
+          .limit(20);
+        
+        console.log(`📋 All nodes in database (${allNodes?.length || 0} total):`);
+        allNodes?.forEach(n => {
+          console.log(`  - ${n.id} (${n.type}) "${n.name}" [flow: ${n.flow_id}]`);
+        });
+      }
+
+      // Fetch the next node
+      const { data: nextNode, error: nextError } = await supabase
         .from('nodes')
         .select('*')
-        .eq('previous_node_id', next_node_id)
+        .eq('id', nextNodeId)
         .maybeSingle();
 
-      if (error) throw error;
-      node = data;
+      if (nextError) {
+        console.error(`❌ Error fetching next node:`, nextError);
+        throw nextError;
+      }
+      
+      if (!nextNode) {
+        console.error(`❌ Next node not found in database: ${nextNodeId}`);
+        console.error(`⚠️ This usually means the flow hasn't been saved yet. Please save the flow in the builder!`);
+        return null;
+      }
+      
+      node = nextNode;
+    } else {
+      console.log(`➡️ Moving to next node from: ${current_node_id}`);
+      // Get the current node to find its connections
+      const { data: currentNode, error: currentError } = await supabase
+        .from('nodes')
+        .select('*')
+        .eq('id', current_node_id)
+        .maybeSingle();
+
+      if (currentError) throw currentError;
+
+      if (!currentNode) {
+        console.log(`❌ Current node not found: ${current_node_id}`);
+        return null;
+      }
+
+      // Get the next node from connections
+      const connections = currentNode.connections || [];
+      
+      if (connections.length === 0) {
+        console.log(`⚠️ No connections found for node: ${current_node_id}`);
+        return null;
+      }
+
+      // Get the first connection's target node
+      const nextNodeId = connections[0].targetNodeId;
+      
+      if (!nextNodeId) {
+        console.log(`⚠️ No targetNodeId in connection`);
+        return null;
+      }
+
+      console.log(`🔗 Moving from node ${current_node_id} to ${nextNodeId}`);
+
+      // Fetch the next node
+      const { data: nextNode, error: nextError } = await supabase
+        .from('nodes')
+        .select('*')
+        .eq('id', nextNodeId)
+        .maybeSingle();
+
+      if (nextError) {
+        console.error(`❌ Error fetching next node:`, nextError);
+        throw nextError;
+      }
+      
+      if (!nextNode) {
+        console.error(`❌ Next node not found in database: ${nextNodeId}`);
+        console.error(`⚠️ This usually means the flow hasn't been saved yet. Please save the flow in the builder!`);
+        return null;
+      }
+
+      node = nextNode;
     }
 
     if (!node) {
-      console.log('No next node found, end of flow');
+      console.log(`⛔ No next node found, end of flow`);
       return null;
+    }
+
+    console.log(`📍 Processing node: ${node.id} (${node.type}) - "${node.name}"`);
+
+    // Get session context for variable interpolation
+    const { data: session } = await supabase
+      .from('contact_sessions')
+      .select('*')
+      .eq('phone_number', phoneNumber)
+      .eq('status', 'active')
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    const context = session?.context || {};
+    console.log(`📦 Session context keys:`, Object.keys(context).length > 0 ? Object.keys(context) : 'empty');
+    if (Object.keys(context).length > 0) {
+      console.log(`📦 Session context data:`, JSON.stringify(context, null, 2));
     }
 
     // Parse properties if it's a string
@@ -64,6 +348,7 @@ async function getNextNode(isFirstMessage, next_node_id, phoneNumber) {
     if (node.type === 'button') {
       // Node has buttons - format as interactive button message
       const buttons = properties?.buttons || [];
+      console.log(`🔘 Button node with ${buttons.length} buttons`);
 
       return {
         messaging_product: 'whatsapp',
@@ -72,7 +357,7 @@ async function getNextNode(isFirstMessage, next_node_id, phoneNumber) {
         interactive: {
           type: 'button',
           body: {
-            text: properties?.label || node.name || 'Choose an option'
+            text: interpolateVariables(properties?.label || node.name || 'Choose an option', context)
           },
           action: {
             buttons: buttons.slice(0, 3).map((btn) => ({
@@ -86,17 +371,57 @@ async function getNextNode(isFirstMessage, next_node_id, phoneNumber) {
         }
       };
     } else if (node.type === 'message') {
-      // Simple text message
-      return {
-        messaging_product: 'whatsapp',
-        to: phoneNumber,
-        type: 'text',
-        text: {
-          body: properties?.label || node.name || 'Hello 👋 How can I help you?'
-        }
-      };
+      // Simple text message - check if it has buttons
+      const buttons = properties?.buttons || [];
+      
+      if (buttons.length > 0) {
+        console.log(`💬 Message node with ${buttons.length} buttons - will STOP after sending`);
+        // Message with buttons - send and STOP (wait for user reply)
+        return {
+          messaging_product: 'whatsapp',
+          to: phoneNumber,
+          type: 'interactive',
+          interactive: {
+            type: 'button',
+            body: {
+              text: interpolateVariables(properties?.label || node.name || 'Choose an option', context)
+            },
+            action: {
+              buttons: buttons.slice(0, 3).map((btn) => ({
+                type: 'reply',
+                reply: {
+                  id: btn.btn_id,
+                  title: btn.text
+                }
+              }))
+            }
+          }
+        };
+      } else {
+        console.log(`💬 Plain message node - will auto-continue after sending`);
+        // Plain message without buttons - send and continue to next node
+        const messageText = interpolateVariables(properties?.label || node.name || 'Hello 👋 How can I help you?', context);
+        console.log(`📤 Sending message: "${messageText.substring(0, 50)}${messageText.length > 50 ? '...' : ''}"`);
+        
+        const messagePayload = {
+          messaging_product: 'whatsapp',
+          to: phoneNumber,
+          type: 'text',
+          text: {
+            body: messageText
+          }
+        };
+        
+        // Send this message first
+        await sendReply(messagePayload);
+        console.log(`✅ Plain message sent, continuing to next node...`);
+        
+        // Then get and return the next node
+        return await getNextNode(false, node.id, phoneNumber);
+      }
     } else if (node.type === 'http') {
-      // HTTP Request node - make API call and continue to next node
+      // HTTP Request node - make API call and save response to variable
+      console.log(`🌐 HTTP node - preparing API request`);
       try {
         const {
           url,
@@ -109,28 +434,34 @@ async function getNextNode(isFirstMessage, next_node_id, phoneNumber) {
           apiKeyValue,
           body,
           headers,
-          timeout
+          timeout,
+          responseVariable
         } = properties;
 
         if (url) {
+          console.log(`🌐 Making HTTP ${method || 'GET'} request to: ${url}`);
+          
           // Parse custom headers
           let customHeaders = {};
           if (headers) {
             try {
               customHeaders = typeof headers === 'string' ? JSON.parse(headers) : headers;
             } catch (e) {
-              console.error('Invalid headers JSON:', e);
+              console.error('❌ Invalid headers JSON:', e);
             }
           }
 
           // Setup authentication
           if (authType === 'bearer' && bearerToken) {
             customHeaders['Authorization'] = `Bearer ${bearerToken}`;
+            console.log(`🔐 Using Bearer token authentication`);
           } else if (authType === 'basic' && basicUsername && basicPassword) {
             const credentials = Buffer.from(`${basicUsername}:${basicPassword}`).toString('base64');
             customHeaders['Authorization'] = `Basic ${credentials}`;
+            console.log(`🔐 Using Basic authentication`);
           } else if (authType === 'apikey' && apiKeyHeader && apiKeyValue) {
             customHeaders[apiKeyHeader] = apiKeyValue;
+            console.log(`🔐 Using API Key authentication (${apiKeyHeader})`);
           }
 
           // Parse request body
@@ -138,13 +469,13 @@ async function getNextNode(isFirstMessage, next_node_id, phoneNumber) {
           if (body && (method === 'POST' || method === 'PUT' || method === 'PATCH')) {
             try {
               requestBody = typeof body === 'string' ? JSON.parse(body) : body;
+              console.log(`📦 Request body:`, JSON.stringify(requestBody).substring(0, 100));
             } catch (e) {
-              console.error('Invalid body JSON:', e);
+              console.error('❌ Invalid body JSON:', e);
             }
           }
 
           // Make HTTP request
-          console.log(`🌐 Making HTTP ${method || 'GET'} request to: ${url}`);
           const response = await axios({
             method: method || 'GET',
             url: url,
@@ -155,25 +486,95 @@ async function getNextNode(isFirstMessage, next_node_id, phoneNumber) {
           });
 
           console.log(`✅ HTTP request completed with status ${response.status}`);
-          return {
-            messaging_product: 'whatsapp',
-            to: phoneNumber,
-            type: 'text',
-            text: {
-              body: 'API request completed successfully. Continuing to next step...' + (response.data ? `\nResponse: ${JSON.stringify(response.data)}` : '')
+          console.log(`📥 Response data:`, JSON.stringify(response.data).substring(0, 200));
+          
+          // Store response in session context if variable name provided
+          if (responseVariable) {
+            console.log(`💾 Saving response to variable: ${responseVariable}`);
+            // Get or create session for this phone number
+            const { data: session } = await supabase
+              .from('contact_sessions')
+              .select('*')
+              .eq('phone_number', phoneNumber)
+              .eq('status', 'active')
+              .order('created_at', { ascending: false })
+              .limit(1)
+              .maybeSingle();
+
+            if (session) {
+              // Save only the response data (not status/headers)
+              const updatedContext = {
+                ...(session.context || {}),
+                [responseVariable]: response.data
+              };
+
+              await supabase
+                .from('contact_sessions')
+                .update({ 
+                  context: updatedContext,
+                  last_interaction_at: new Date().toISOString()
+                })
+                .eq('id', session.id);
+
+              console.log(`✅ Response saved to variable: ${responseVariable}`);
+              console.log(`📦 Updated session context:`, JSON.stringify(updatedContext, null, 2));
+            } else {
+              console.log(`⚠️ No active session found to save variable`);
+              console.log(`🔍 Attempting to create session for phone: ${phoneNumber}`);
+              
+              // Try to create a session if it doesn't exist
+              const { data: contact } = await supabase
+                .from('contacts')
+                .select('*')
+                .eq('phone_number', phoneNumber)
+                .maybeSingle();
+              
+              if (contact) {
+                // Get the flow_id from the current node
+                const { data: currentNode } = await supabase
+                  .from('nodes')
+                  .select('flow_id')
+                  .eq('id', node.id)
+                  .single();
+                
+                const { data: createdSession, error: createError } = await supabase
+                  .from('contact_sessions')
+                  .insert({
+                    contact_id: contact.id,
+                    phone_number: phoneNumber,
+                    flow_id: currentNode?.flow_id,
+                    current_node_id: node.id,
+                    status: 'active',
+                    context: {
+                      [responseVariable]: response.data
+                    },
+                    last_interaction_at: new Date().toISOString()
+                  })
+                  .select()
+                  .single();
+                
+                if (createError) {
+                  console.error(`❌ Error creating session:`, createError);
+                } else {
+                  console.log(`✅ Session created and response saved: ${createdSession.id}`);
+                  console.log(`📦 New session context:`, JSON.stringify(createdSession.context, null, 2));
+                }
+              } else {
+                console.error(`❌ Contact not found for phone: ${phoneNumber}`);
+              }
             }
-          };
+          }
+          
+          // HTTP node doesn't send a message, continue to next node
+          console.log(`🔄 HTTP node completed, moving to next node...`);
+          
+          // Get the next node after this HTTP node
+          return await getNextNode(false, node.id, phoneNumber);
         }
       } catch (error) {
-        return {
-            messaging_product: 'whatsapp',
-            to: phoneNumber,
-            type: 'text',
-            text: {
-              body: 'API request failed. Please try again later.'
-            }
-          };
         console.error('❌ HTTP request failed:', error.message);
+        // Continue to next node even on error
+        return await getNextNode(false, node.id, phoneNumber);
       }
     } else {
       // Default to text message for other types
@@ -182,7 +583,7 @@ async function getNextNode(isFirstMessage, next_node_id, phoneNumber) {
         to: phoneNumber,
         type: 'text',
         text: {
-          body: properties?.label || node.name || 'Message'
+          body: interpolateVariables(properties?.label || node.name || 'Message', context)
         }
       };
     }
@@ -560,7 +961,8 @@ export const handleWhatsAppWebhook = async (req, res) => {
             } else if (messageType === 'interactive') {
               // User clicked a button
               const buttonId = message.interactive.button_reply.id;
-              messageContent = await getNextNode(false, buttonId, from);
+              console.log(`🔘 Button clicked: ${buttonId}`);
+              messageContent = await getNextNode(false, buttonId, from, true); // true = isButtonClick
 
 
 
