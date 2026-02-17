@@ -1,5 +1,6 @@
 import supabase from '../config/supabase.js';
 import axios from 'axios';
+import { storeBotMessage } from '../controllers/conversationController.js';
 
 // --- Engine ---
 
@@ -914,6 +915,38 @@ export const FlowEngine = {
           status: status,
           wati_message_id: waMessageId,
       });
+      
+      // 5. Store in conversations table for conversation history
+      console.log('[FlowEngine] Preparing to store bot message in conversations...');
+      const messageText = content.label || content.message || 
+                         (content.buttons ? content.buttons.map(b => b.text).join(', ') : '') ||
+                         (content.listItems ? content.listItems.map(i => i.title).join(', ') : '');
+      
+      console.log('[FlowEngine] Message text extracted:', messageText?.substring(0, 50));
+      
+      // Get flow_id and node_id from session
+      const { data: session } = await supabase
+        .from('contact_sessions')
+        .select('flow_id')
+        .eq('phone_number', to)
+        .eq('status', 'active')
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      
+      console.log('[FlowEngine] Session found:', session ? 'Yes' : 'No', 'Flow ID:', session?.flow_id);
+      console.log('[FlowEngine] Calling storeBotMessage with nodeId:', nodeId);
+      
+      await storeBotMessage(
+        to, 
+        messageText, 
+        session?.flow_id || null, 
+        nodeId || null, 
+        waMessageId, 
+        status
+      );
+      
+      console.log('[FlowEngine] ✓ storeBotMessage call completed');
 
     } catch (error) {
         console.error('[FlowEngine] Send Error:', error.response?.data || error.message);

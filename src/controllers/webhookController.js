@@ -4,6 +4,7 @@ import axios from 'axios';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { storeUserMessage, storeBotMessage } from './conversationController.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -614,6 +615,47 @@ async function sendReply(messageContent) {
       }
     );
     console.log(`✅ Reply sent to ${messageContent.to}`);
+    
+    // Store bot message in conversations table
+    const phoneNumber = messageContent.to;
+    let messageText = '';
+    
+    // Extract message text based on message type
+    if (messageContent.type === 'text') {
+      messageText = messageContent.text?.body || '';
+    } else if (messageContent.type === 'interactive') {
+      if (messageContent.interactive?.type === 'button') {
+        // Include button text in the message
+        const bodyText = messageContent.interactive.body?.text || '';
+        const buttons = messageContent.interactive.action?.buttons || [];
+        const buttonTexts = buttons.map(btn => btn.reply?.title).filter(Boolean);
+        
+        if (buttonTexts.length > 0) {
+          messageText = `${bodyText}\n\n${buttonTexts.map((text, idx) => `${idx + 1}. ${text}`).join('\n')}`;
+        } else {
+          messageText = bodyText;
+        }
+      } else if (messageContent.interactive?.type === 'list') {
+        const bodyText = messageContent.interactive.body?.text || '';
+        const sections = messageContent.interactive.action?.sections || [];
+        const listItems = sections.flatMap(section => 
+          (section.rows || []).map(row => row.title)
+        ).filter(Boolean);
+        
+        if (listItems.length > 0) {
+          messageText = `${bodyText}\n\n${listItems.map((text, idx) => `${idx + 1}. ${text}`).join('\n')}`;
+        } else {
+          messageText = bodyText;
+        }
+      }
+    }
+    
+    if (messageText && phoneNumber) {
+      console.log(`[Webhook] Storing bot message: "${messageText.substring(0, 50)}..."`);
+      await storeBotMessage(phoneNumber, messageText, null, null, null, 'sent');
+      console.log(`[Webhook] ✓ Bot message stored in conversations`);
+    }
+    
     return true;
   } catch (error) {
     console.error('❌ Error sending reply:', error.response?.data || error.message);
@@ -932,6 +974,9 @@ export const handleWhatsAppWebhook = async (req, res) => {
             if (messageType === 'text') {
               // User sent a text message - send welcome buttons
               console.log(`💬 Text message: ${message.text.body}`);
+              
+              // Store user message in conversations
+              await storeUserMessage(from, message.text.body);
 
               if (message.text.body.toLowerCase().includes('hi') || message.text.body.toLowerCase().includes('hello')) {
                 messageContent = await getNextNode(true, null, from);
@@ -961,7 +1006,12 @@ export const handleWhatsAppWebhook = async (req, res) => {
             } else if (messageType === 'interactive') {
               // User clicked a button
               const buttonId = message.interactive.button_reply.id;
+              const buttonText = message.interactive.button_reply.title;
               console.log(`🔘 Button clicked: ${buttonId}`);
+              
+              // Store user button click in conversations
+              await storeUserMessage(from, buttonText);
+              
               messageContent = await getNextNode(false, buttonId, from, true); // true = isButtonClick
 
 

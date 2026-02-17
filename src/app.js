@@ -15,6 +15,7 @@ import messageRoutes from './routes/messages.js';
 import webhookRoutes from './routes/webhooks.js';
 import contactRoutes from './routes/contacts.js';
 import templateRoutes from './routes/templates.js';
+import conversationRoutes from './routes/conversations.js';
 
 // Load environment variables
 dotenv.config();
@@ -46,6 +47,7 @@ app.use('/api/messages', messageRoutes);
 app.use('/api/webhooks', webhookRoutes);
 app.use('/api/contacts', contactRoutes);
 app.use('/api/templates', templateRoutes);
+app.use('/api/conversations', conversationRoutes);
 
 /**
  * Health check endpoint
