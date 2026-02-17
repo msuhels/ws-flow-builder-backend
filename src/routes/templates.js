@@ -1,7 +1,9 @@
 import express from 'express';
 import {
   getTemplates,
+  getTemplateById,
   createTemplate,
+  updateTemplate,
   submitTemplateToMeta,
   syncTemplateStatus,
   deleteTemplate,
@@ -16,8 +18,14 @@ router.use(protect);
 // Get all templates
 router.get('/', getTemplates);
 
+// Get single template by ID
+router.get('/:id', getTemplateById);
+
 // Create new template
 router.post('/', createTemplate);
+
+// Update template (only DRAFT)
+router.put('/:id', updateTemplate);
 
 // Submit template to Meta for approval
 router.post('/:id/submit', submitTemplateToMeta);

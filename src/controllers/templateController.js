@@ -25,6 +25,103 @@ export const getTemplates = async (req, res) => {
   }
 };
 
+// Get single template by ID
+export const getTemplateById = async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const { data, error } = await supabase
+      .from('templates')
+      .select('*')
+      .eq('id', id)
+      .single();
+
+    if (error || !data) {
+      return sendError(res, 'Template not found', 404);
+    }
+
+    return sendSuccess(res, data, 'Template fetched successfully');
+  } catch (error) {
+    console.error('Get template error:', error);
+    return sendError(res, error.message || 'Failed to fetch template', 500);
+  }
+};
+
+// Update template (only if status is DRAFT)
+export const updateTemplate = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { name, language, category, headerText, bodyText, footerText, buttons } = req.body;
+
+    // Get existing template
+    const { data: existingTemplate, error: fetchError } = await supabase
+      .from('templates')
+      .select('*')
+      .eq('id', id)
+      .single();
+
+    if (fetchError || !existingTemplate) {
+      return sendError(res, 'Template not found', 404);
+    }
+
+    // Check if template is in DRAFT status
+    if (existingTemplate.status !== 'DRAFT') {
+      return sendError(res, 'Only DRAFT templates can be edited', 400);
+    }
+
+    // Build components array
+    const components = [];
+
+    if (headerText) {
+      components.push({
+        type: 'HEADER',
+        format: 'TEXT',
+        text: headerText,
+      });
+    }
+
+    components.push({
+      type: 'BODY',
+      text: bodyText,
+    });
+
+    if (footerText) {
+      components.push({
+        type: 'FOOTER',
+        text: footerText,
+      });
+    }
+
+    if (buttons && buttons.length > 0) {
+      components.push({
+        type: 'BUTTONS',
+        buttons: buttons,
+      });
+    }
+
+    // Update template
+    const { data, error } = await supabase
+      .from('templates')
+      .update({
+        name,
+        language,
+        category,
+        components,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', id)
+      .select()
+      .single();
+
+    if (error) throw error;
+
+    return sendSuccess(res, data, 'Template updated successfully');
+  } catch (error) {
+    console.error('Update template error:', error);
+    return sendError(res, error.message || 'Failed to update template', 500);
+  }
+};
+
 // Create a new template
 export const createTemplate = async (req, res) => {
   try {
