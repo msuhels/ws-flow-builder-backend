@@ -7,6 +7,7 @@ const mapConfig = (config) => ({
   baseUrl: config.base_url,
   apiKey: config.api_key,
   businessNumberId: config.business_number_id,
+  whatsappBusinessAccountId: config.whatsapp_business_account_id,
   lastTested: config.last_tested,
   isActive: config.is_active,
   updatedAt: config.updated_at,
@@ -57,7 +58,7 @@ export const getApiConfig = async (req, res) => {
  */
 export const updateApiConfig = async (req, res) => {
   try {
-    const { baseUrl, apiKey, businessNumberId } = req.body;
+    const { baseUrl, apiKey, businessNumberId, whatsappBusinessAccountId } = req.body;
 
     const { data: existing, error: fetchError } = await supabase
       .from('api_config')
@@ -71,6 +72,7 @@ export const updateApiConfig = async (req, res) => {
     const updates = {
       base_url: baseUrl,
       business_number_id: businessNumberId,
+      whatsapp_business_account_id: whatsappBusinessAccountId,
       updated_at: new Date().toISOString(),
     };
 
