@@ -196,25 +196,16 @@ export const submitTemplateToMeta = async (req, res) => {
       return sendError(res, 'Template not found', 404);
     }
 
-    // Get WhatsApp settings from api_config
-    const { data: config, error: configError } = await supabase
-      .from('api_config')
-      .select('*')
-      .limit(1)
-      .maybeSingle();
+    // Get WhatsApp credentials from environment variables
+    const whatsapp_access_token = process.env.WHATSAPP_TOKEN;
+    const whatsapp_business_account_id = process.env.WHATSAPP_BUSINESS_ACCOUNT_ID;
 
-    if (configError || !config) {
-      return sendError(res, 'WhatsApp API configuration not found. Please configure in Settings first.', 400);
-    }
-
-    const { api_key, whatsapp_business_account_id } = config;
-
-    if (!api_key) {
-      return sendError(res, 'WhatsApp Access Token not configured. Please add it in Settings.', 400);
+    if (!whatsapp_access_token) {
+      return sendError(res, 'WhatsApp Access Token not configured in environment variables', 400);
     }
 
     if (!whatsapp_business_account_id) {
-      return sendError(res, 'WhatsApp Business Account ID not configured. Please add it in Settings.', 400);
+      return sendError(res, 'WhatsApp Business Account ID not configured in environment variables', 400);
     }
 
     // Submit to Meta WhatsApp Business API
@@ -228,7 +219,7 @@ export const submitTemplateToMeta = async (req, res) => {
       },
       {
         headers: {
-          Authorization: `Bearer ${api_key}`,
+          Authorization: `Bearer ${whatsapp_access_token}`,
           'Content-Type': 'application/json',
         },
       }
@@ -282,25 +273,19 @@ export const syncTemplateStatus = async (req, res) => {
       return sendError(res, 'Template not submitted to Meta yet', 400);
     }
 
-    // Get WhatsApp settings from api_config
-    const { data: config } = await supabase
-      .from('api_config')
-      .select('*')
-      .limit(1)
-      .maybeSingle();
+    // Get WhatsApp credentials from environment variables
+    const whatsapp_access_token = process.env.WHATSAPP_TOKEN;
 
-    if (!config) {
-      return sendError(res, 'WhatsApp API configuration not found', 400);
+    if (!whatsapp_access_token) {
+      return sendError(res, 'WhatsApp Access Token not configured in environment variables', 400);
     }
-
-    const { api_key } = config;
 
     // Get template status from Meta
     const metaResponse = await axios.get(
       `https://graph.facebook.com/v18.0/${template.meta_template_id}`,
       {
         headers: {
-          Authorization: `Bearer ${api_key}`,
+          Authorization: `Bearer ${whatsapp_access_token}`,
         },
       }
     );
