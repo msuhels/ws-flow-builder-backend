@@ -18,7 +18,48 @@ export const getTemplates = async (req, res) => {
       throw error;
     }
 
-    return sendSuccess(res, data || [], 'Templates fetched successfully');
+    const templates = data || [];
+
+    // Auto-sync pending templates
+    const whatsapp_access_token = process.env.WHATSAPP_TOKEN;
+    
+    if (whatsapp_access_token) {
+      const pendingTemplates = templates.filter(t => t.status === 'PENDING' && t.meta_template_id);
+      
+      // Sync each pending template in background (don't wait)
+      pendingTemplates.forEach(async (template) => {
+        try {
+          const metaResponse = await axios.get(
+            `https://graph.facebook.com/v19.0/${template.meta_template_id}`,
+            {
+              headers: {
+                Authorization: `Bearer ${whatsapp_access_token}`,
+              },
+            }
+          );
+
+          const metaStatus = metaResponse.data.status;
+          
+          // Only update if status changed
+          if (metaStatus && metaStatus !== 'PENDING') {
+            await supabase
+              .from('templates')
+              .update({
+                status: metaStatus,
+                updated_at: new Date().toISOString(),
+              })
+              .eq('id', template.id);
+            
+            console.log(`Auto-synced template ${template.id}: ${template.status} -> ${metaStatus}`);
+          }
+        } catch (error) {
+          // Silently fail - don't block the main response
+          console.error(`Failed to auto-sync template ${template.id}:`, error.message);
+        }
+      });
+    }
+
+    return sendSuccess(res, templates, 'Templates fetched successfully');
   } catch (error) {
     console.error('Get templates error:', error);
     return sendError(res, error.message || 'Failed to fetch templates', 500);
@@ -51,7 +92,7 @@ export const getTemplateById = async (req, res) => {
 export const updateTemplate = async (req, res) => {
   try {
     const { id } = req.params;
-    const { name, language, category, headerText, bodyText, footerText, buttons } = req.body;
+    const { name, language, category, headerType, headerText, headerMediaUrl, bodyText, footerText, buttons } = req.body;
 
     // Get existing template
     const { data: existingTemplate, error: fetchError } = await supabase
@@ -72,12 +113,23 @@ export const updateTemplate = async (req, res) => {
     // Build components array
     const components = [];
 
-    if (headerText) {
-      components.push({
-        type: 'HEADER',
-        format: 'TEXT',
-        text: headerText,
-      });
+    // Handle header based on type
+    if (headerType && (headerText || headerMediaUrl)) {
+      if (headerType === 'TEXT' && headerText) {
+        components.push({
+          type: 'HEADER',
+          format: 'TEXT',
+          text: headerText,
+        });
+      } else if (['IMAGE', 'VIDEO', 'DOCUMENT'].includes(headerType) && headerMediaUrl) {
+        components.push({
+          type: 'HEADER',
+          format: headerType,
+          example: {
+            header_handle: [headerMediaUrl],
+          },
+        });
+      }
     }
 
     components.push({
@@ -125,17 +177,28 @@ export const updateTemplate = async (req, res) => {
 // Create a new template
 export const createTemplate = async (req, res) => {
   try {
-    const { name, language, category, headerText, bodyText, footerText, buttons } = req.body;
+    const { name, language, category, headerType, headerText, headerMediaUrl, bodyText, footerText, buttons } = req.body;
 
     // Build components array for WhatsApp template
     const components = [];
 
-    if (headerText) {
-      components.push({
-        type: 'HEADER',
-        format: 'TEXT',
-        text: headerText,
-      });
+    // Handle header based on type
+    if (headerType && (headerText || headerMediaUrl)) {
+      if (headerType === 'TEXT' && headerText) {
+        components.push({
+          type: 'HEADER',
+          format: 'TEXT',
+          text: headerText,
+        });
+      } else if (['IMAGE', 'VIDEO', 'DOCUMENT'].includes(headerType) && headerMediaUrl) {
+        components.push({
+          type: 'HEADER',
+          format: headerType,
+          example: {
+            header_handle: [headerMediaUrl],
+          },
+        });
+      }
     }
 
     components.push({
@@ -208,9 +271,9 @@ export const submitTemplateToMeta = async (req, res) => {
       return sendError(res, 'WhatsApp Business Account ID not configured in environment variables', 400);
     }
 
-    // Submit to Meta WhatsApp Business API
+    // Submit to Meta WhatsApp Business API (using v19.0 for latest API)
     const metaResponse = await axios.post(
-      `https://graph.facebook.com/v18.0/${whatsapp_business_account_id}/message_templates`,
+      `https://graph.facebook.com/v19.0/${whatsapp_business_account_id}/message_templates`,
       {
         name: template.name,
         language: template.language,
@@ -225,11 +288,14 @@ export const submitTemplateToMeta = async (req, res) => {
       }
     );
 
-    // Update template status
+    // Meta returns the status immediately in the response
+    const metaStatus = metaResponse.data.status || 'PENDING';
+    
+    // Update template with status from Meta
     const { data: updatedTemplate, error: updateError } = await supabase
       .from('templates')
       .update({
-        status: 'PENDING',
+        status: metaStatus,
         meta_template_id: metaResponse.data.id,
         updated_at: new Date().toISOString(),
       })
@@ -239,7 +305,17 @@ export const submitTemplateToMeta = async (req, res) => {
 
     if (updateError) throw updateError;
 
-    return sendSuccess(res, updatedTemplate, 'Template submitted to Meta successfully');
+    // Return appropriate message based on status
+    let message = 'Template submitted to Meta successfully';
+    if (metaStatus === 'APPROVED') {
+      message = 'Template submitted and approved by Meta';
+    } else if (metaStatus === 'REJECTED') {
+      message = 'Template submitted but rejected by Meta';
+    } else if (metaStatus === 'PENDING') {
+      message = 'Template submitted and pending Meta approval';
+    }
+
+    return sendSuccess(res, updatedTemplate, message);
   } catch (error) {
     console.error('Submit template error:', error);
     if (error.response) {
@@ -280,9 +356,9 @@ export const syncTemplateStatus = async (req, res) => {
       return sendError(res, 'WhatsApp Access Token not configured in environment variables', 400);
     }
 
-    // Get template status from Meta
+    // Get template status from Meta (using v19.0 for latest API)
     const metaResponse = await axios.get(
-      `https://graph.facebook.com/v18.0/${template.meta_template_id}`,
+      `https://graph.facebook.com/v19.0/${template.meta_template_id}`,
       {
         headers: {
           Authorization: `Bearer ${whatsapp_access_token}`,
@@ -290,11 +366,18 @@ export const syncTemplateStatus = async (req, res) => {
       }
     );
 
+    // Extract status from Meta response
+    const metaStatus = metaResponse.data.status;
+    
+    if (!metaStatus) {
+      return sendError(res, 'Could not retrieve status from Meta', 500);
+    }
+
     // Update template status
     const { data: updatedTemplate, error: updateError } = await supabase
       .from('templates')
       .update({
-        status: metaResponse.data.status,
+        status: metaStatus,
         updated_at: new Date().toISOString(),
       })
       .eq('id', id)
@@ -303,9 +386,26 @@ export const syncTemplateStatus = async (req, res) => {
 
     if (updateError) throw updateError;
 
-    return sendSuccess(res, updatedTemplate, 'Template status synced successfully');
+    // Return appropriate message based on status
+    let message = 'Template status synced successfully';
+    if (metaStatus === 'APPROVED') {
+      message = 'Template is approved and ready to use';
+    } else if (metaStatus === 'REJECTED') {
+      message = 'Template was rejected by Meta';
+    } else if (metaStatus === 'PENDING') {
+      message = 'Template is still pending approval';
+    }
+
+    return sendSuccess(res, updatedTemplate, message);
   } catch (error) {
     console.error('Sync template error:', error);
+    if (error.response) {
+      return sendError(
+        res,
+        error.response.data.error?.message || 'Failed to sync template status from Meta',
+        error.response.status
+      );
+    }
     return sendError(res, error.message || 'Failed to sync template status', 500);
   }
 };
