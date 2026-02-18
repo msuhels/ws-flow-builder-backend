@@ -319,11 +319,9 @@ export const submitTemplateToMeta = async (req, res) => {
   } catch (error) {
     console.error('Submit template error:', error);
     if (error.response) {
-      return sendError(
-        res,
-        error.response.data.error?.message || 'Failed to submit template to Meta',
-        error.response.status
-      );
+      // Meta API error - return 400 (not 401/403 to avoid login redirect)
+      const metaError = error.response.data.error?.message || 'Failed to submit template to Meta';
+      return sendError(res, metaError, 400);
     }
     return sendError(res, error.message || 'Failed to submit template', 500);
   }
@@ -400,11 +398,9 @@ export const syncTemplateStatus = async (req, res) => {
   } catch (error) {
     console.error('Sync template error:', error);
     if (error.response) {
-      return sendError(
-        res,
-        error.response.data.error?.message || 'Failed to sync template status from Meta',
-        error.response.status
-      );
+      // Meta API error - return 400 (not 401/403 to avoid login redirect)
+      const metaError = error.response.data.error?.message || 'Failed to sync template status from Meta';
+      return sendError(res, metaError, 400);
     }
     return sendError(res, error.message || 'Failed to sync template status', 500);
   }
