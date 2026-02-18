@@ -1,6 +1,79 @@
 import supabase from '../config/supabase.js';
 import axios from 'axios';
 
+// In-memory cache for last user interaction times
+// Structure: { phoneNumber: { timestamp: Date, cachedAt: Date } }
+const lastInteractionCache = new Map();
+const CACHE_TTL = 5 * 60 * 1000; // 5 minutes cache TTL
+
+/**
+ * Get last user interaction time from cache or database
+ */
+const getLastUserInteraction = async (phoneNumber) => {
+  const now = new Date();
+  const cached = lastInteractionCache.get(phoneNumber);
+
+  // Check if cache is valid (exists and not expired)
+  if (cached && (now - cached.cachedAt) < CACHE_TTL) {
+    console.log('[Cache] Using cached last interaction for:', phoneNumber);
+    return cached.timestamp;
+  }
+
+  // Cache miss or expired - fetch from database
+  console.log('[Cache] Fetching last interaction from DB for:', phoneNumber);
+  const { data: lastUserMessage, error } = await supabase
+    .from('conversations')
+    .select('created_at')
+    .eq('phone_number', phoneNumber)
+    .eq('direction', 'received')
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (error) {
+    console.error('[Cache] Error fetching last interaction:', error);
+    return null;
+  }
+
+  const timestamp = lastUserMessage ? new Date(lastUserMessage.created_at) : null;
+
+  // Update cache
+  if (timestamp) {
+    lastInteractionCache.set(phoneNumber, {
+      timestamp,
+      cachedAt: now
+    });
+    console.log('[Cache] Cached last interaction for:', phoneNumber);
+  }
+
+  return timestamp;
+};
+
+/**
+ * Update cache when user sends a message (called from webhook/storeUserMessage)
+ */
+export const updateLastInteractionCache = (phoneNumber) => {
+  const now = new Date();
+  lastInteractionCache.set(phoneNumber, {
+    timestamp: now,
+    cachedAt: now
+  });
+  console.log('[Cache] Updated cache for new user message:', phoneNumber);
+};
+
+/**
+ * Clear cache for a specific phone number (useful for testing or manual invalidation)
+ */
+export const clearInteractionCache = (phoneNumber) => {
+  if (phoneNumber) {
+    lastInteractionCache.delete(phoneNumber);
+    console.log('[Cache] Cleared cache for:', phoneNumber);
+  } else {
+    lastInteractionCache.clear();
+    console.log('[Cache] Cleared all cache');
+  }
+};
+
 /**
  * Get all conversations (list of users with last message)
  */
@@ -83,6 +156,40 @@ export const sendConversationMessage = async (req, res) => {
       return res.status(400).json({ 
         success: false, 
         message: 'Phone number and message are required' 
+      });
+    }
+
+    // Check 24-hour messaging window (WhatsApp Policy)
+    const lastMessageTime = await getLastUserInteraction(phoneNumber);
+
+    if (lastMessageTime) {
+      const currentTime = new Date();
+      const hoursDifference = (currentTime - lastMessageTime) / (1000 * 60 * 60);
+
+      console.log('[Conversation] Last user message time:', lastMessageTime);
+      console.log('[Conversation] Hours since last message:', hoursDifference.toFixed(2));
+
+      // WhatsApp allows messaging within 24 hours of last user interaction
+      if (hoursDifference > 24) {
+        return res.status(403).json({ 
+          success: false, 
+          message: 'Cannot send message: 24-hour messaging window expired',
+          reason: 'whatsapp_policy',
+          details: `Last user interaction was ${Math.floor(hoursDifference)} hours ago. You can only send template messages or wait for the user to message you first.`,
+          lastInteraction: lastMessageTime,
+          hoursSinceLastMessage: hoursDifference
+        });
+      }
+    } else {
+      // No previous user message found - cannot send regular message
+      console.log('[Conversation] No previous user message found');
+      return res.status(403).json({ 
+        success: false, 
+        message: 'Cannot send message: No previous interaction from user',
+        reason: 'whatsapp_policy',
+        details: 'You can only send template messages to users who have not interacted with you yet, or wait for them to message you first.',
+        lastInteraction: null,
+        hoursSinceLastMessage: null
       });
     }
 
@@ -236,6 +343,9 @@ export const storeUserMessage = async (phoneNumber, message) => {
       direction: 'received',
       status: 'received'
     });
+    
+    // Update cache with new user interaction
+    updateLastInteractionCache(phoneNumber);
   } catch (error) {
     console.error('Error storing user message:', error);
   }
