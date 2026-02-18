@@ -943,17 +943,95 @@ async function markMessageAsRead(messageId) {
 }
 
 /**
+ * Handle template status update webhook
+ * Updates template status in database when Meta sends status change notification
+ */
+async function handleTemplateStatusUpdate(webhookData) {
+  try {
+    console.log('📋 Processing template status update webhook');
+    
+    // Extract template status data from webhook
+    const entry = webhookData.entry?.[0];
+    const change = entry?.changes?.[0];
+    const value = change?.value;
+    
+    if (change?.field !== 'message_template_status_update') {
+      console.log('⚠️ Not a template status update webhook');
+      return;
+    }
+    
+    const {
+      event,
+      message_template_id,
+      message_template_name,
+      message_template_language,
+      reason
+    } = value;
+    
+    console.log(`📋 Template: ${message_template_name} (${message_template_id})`);
+    console.log(`📋 Status: ${event}`);
+    console.log(`📋 Reason: ${reason}`);
+    
+    // Find template in database by meta_template_id
+    const { data: template, error: fetchError } = await supabase
+      .from('templates')
+      .select('*')
+      .eq('meta_template_id', String(message_template_id))
+      .maybeSingle();
+    
+    if (fetchError) {
+      console.error('❌ Error fetching template:', fetchError);
+      return;
+    }
+    
+    if (!template) {
+      console.log(`⚠️ Template not found in database: ${message_template_id}`);
+      return;
+    }
+    
+    console.log(`✅ Found template in database: ${template.id} (${template.name})`);
+    
+    // Update template status
+    const { error: updateError } = await supabase
+      .from('templates')
+      .update({
+        status: event,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', template.id);
+    
+    if (updateError) {
+      console.error('❌ Error updating template status:', updateError);
+      return;
+    }
+    
+    console.log(`✅ Template status updated: ${template.status} -> ${event}`);
+    
+  } catch (error) {
+    console.error('❌ Error handling template status update:', error);
+  }
+}
+
+/**
  * Incoming Webhook for WhatsApp Cloud API
  */
 export const handleWhatsAppWebhook = async (req, res) => {
   try {
     const body = req.body;
     // Store webhook data to db.json
-    storeWebhookData(body);
+    // storeWebhookData(body);
 
     // Check if this is a WhatsApp message event
     if (body.object === 'whatsapp_business_account') {
-      // Loop through entries
+      // Check if this is a template status update
+      const firstChange = body.entry?.[0]?.changes?.[0];
+      if (firstChange?.field === 'message_template_status_update') {
+        console.log('📋 Received template status update webhook');
+        await handleTemplateStatusUpdate(body);
+        return res.sendStatus(200);
+      }
+      
+      // Loop through entries for regular messages
       for (const entry of body.entry) {
         const changes = entry.changes;
 

@@ -18,48 +18,7 @@ export const getTemplates = async (req, res) => {
       throw error;
     }
 
-    const templates = data || [];
-
-    // Auto-sync pending templates
-    const whatsapp_access_token = process.env.WHATSAPP_TOKEN;
-    
-    if (whatsapp_access_token) {
-      const pendingTemplates = templates.filter(t => t.status === 'PENDING' && t.meta_template_id);
-      
-      // Sync each pending template in background (don't wait)
-      pendingTemplates.forEach(async (template) => {
-        try {
-          const metaResponse = await axios.get(
-            `https://graph.facebook.com/v19.0/${template.meta_template_id}`,
-            {
-              headers: {
-                Authorization: `Bearer ${whatsapp_access_token}`,
-              },
-            }
-          );
-
-          const metaStatus = metaResponse.data.status;
-          
-          // Only update if status changed
-          if (metaStatus && metaStatus !== 'PENDING') {
-            await supabase
-              .from('templates')
-              .update({
-                status: metaStatus,
-                updated_at: new Date().toISOString(),
-              })
-              .eq('id', template.id);
-            
-            console.log(`Auto-synced template ${template.id}: ${template.status} -> ${metaStatus}`);
-          }
-        } catch (error) {
-          // Silently fail - don't block the main response
-          console.error(`Failed to auto-sync template ${template.id}:`, error.message);
-        }
-      });
-    }
-
-    return sendSuccess(res, templates, 'Templates fetched successfully');
+    return sendSuccess(res, data || [], 'Templates fetched successfully');
   } catch (error) {
     console.error('Get templates error:', error);
     return sendError(res, error.message || 'Failed to fetch templates', 500);
