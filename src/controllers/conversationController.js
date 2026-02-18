@@ -86,30 +86,28 @@ export const sendConversationMessage = async (req, res) => {
       });
     }
 
-    // Get WhatsApp API Config
-    const { data: config, error: configError } = await supabase
-      .from('api_config')
-      .select('*')
-      .eq('is_active', true)
-      .limit(1)
-      .maybeSingle();
+    // Get WhatsApp API Config from environment variables
+    const whatsappToken = process.env.WHATSAPP_TOKEN;
+    const phoneNumberId = process.env.PHONE_NUMBER_ID;
 
-    console.log('[Conversation] API Config:', config ? 'Found' : 'Not found', configError);
+    console.log('[Conversation] API Config:', { 
+      hasToken: !!whatsappToken, 
+      hasPhoneNumberId: !!phoneNumberId 
+    });
 
-    if (!config || !config.api_key || !config.business_number_id) {
-      console.error('[Conversation] Missing API config:', { 
-        hasConfig: !!config, 
-        hasApiKey: !!config?.api_key, 
-        hasBusinessId: !!config?.business_number_id 
+    if (!whatsappToken || !phoneNumberId) {
+      console.error('[Conversation] Missing API config in environment variables:', { 
+        hasToken: !!whatsappToken, 
+        hasPhoneNumberId: !!phoneNumberId 
       });
       return res.status(400).json({ 
         success: false, 
-        message: 'WhatsApp API not configured. Please configure in Settings.' 
+        message: 'WhatsApp API not configured. Please check environment variables (WHATSAPP_TOKEN, PHONE_NUMBER_ID).' 
       });
     }
 
     const version = 'v17.0';
-    const url = `https://graph.facebook.com/${version}/${config.business_number_id}/messages`;
+    const url = `https://graph.facebook.com/${version}/${phoneNumberId}/messages`;
 
     // Prepare WhatsApp payload
     const waPayload = {
@@ -128,7 +126,7 @@ export const sendConversationMessage = async (req, res) => {
       console.log('[Conversation] Sending to WhatsApp:', { to: phoneNumber, url });
       const response = await axios.post(url, waPayload, {
         headers: { 
-          'Authorization': `Bearer ${config.api_key}`,
+          'Authorization': `Bearer ${whatsappToken}`,
           'Content-Type': 'application/json'
         }
       });
