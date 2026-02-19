@@ -1010,7 +1010,7 @@ export const handleWhatsAppWebhook = async (req, res) => {
     const body = req.body;
     let flowId = 'd0adc94d-a85e-44c9-8dfa-0bab5fcd5d9e';
     // Store webhook data to db.json
-    // storeWebhookData(body);
+    storeWebhookData(body);
 
     // Check if this is a WhatsApp message event
     if (body.object === 'whatsapp_business_account') {
