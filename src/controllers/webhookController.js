@@ -24,14 +24,14 @@ const DB_JSON_PATH = path.join(__dirname, '..', 'db.json');
  */
 function interpolateVariables(text, context) {
   if (!text) return text;
-  
+
   console.log(`🔄 Interpolating variables in text. Context keys:`, Object.keys(context));
-  
+
   return text.replace(/\{\{([\w.]+)\}\}/g, (match, varPath) => {
     try {
       const keys = varPath.split('.');
       let value = context;
-      
+
       for (const key of keys) {
         if (value && typeof value === 'object' && key in value) {
           value = value[key];
@@ -41,7 +41,7 @@ function interpolateVariables(text, context) {
           return '';
         }
       }
-      
+
       if (value !== undefined && value !== null) {
         if (typeof value === 'object') {
           return JSON.stringify(value);
@@ -49,7 +49,7 @@ function interpolateVariables(text, context) {
         console.log(`✓ Replaced {{${varPath}}} with: ${String(value)}`);
         return String(value);
       }
-      
+
       // Variable exists but is null/undefined - remove placeholder
       console.log(`⚠️ Variable ${varPath} is null/undefined, removing from message`);
       return '';
@@ -68,29 +68,19 @@ function interpolateVariables(text, context) {
 async function findNodeByButtonId(buttonId) {
   try {
     console.log(`🔍 Searching for node with button ID: ${buttonId}`);
-    
-    // Get all nodes
+
+    // Query directly using JSONB contains operator
+    // This searches for any node where properties->buttons array contains an object with btn_id = buttonId
     const { data: nodes, error } = await supabase
       .from('nodes')
-      .select('*');
+      .select('*')
+      .contains('properties->buttons', [{ btn_id: buttonId }]);
 
     if (error) throw error;
 
-    // Search through nodes to find which one has this button
-    for (const node of nodes) {
-      const properties = typeof node.properties === 'string'
-        ? JSON.parse(node.properties)
-        : node.properties;
-
-      const buttons = properties?.buttons || [];
-      
-      // Check if this node has the button we're looking for
-      const hasButton = buttons.some(btn => btn.btn_id === buttonId);
-      
-      if (hasButton) {
-        console.log(`✅ Found button in node: ${node.id} (${node.type})`);
-        return node;
-      }
+    if (nodes && nodes.length > 0) {
+      console.log(`✅ Found button in node: ${nodes[0].id} (${nodes[0].type})`);
+      return nodes[0];
     }
 
     console.log(`❌ No node found with button ID: ${buttonId}`);
@@ -109,7 +99,7 @@ async function findNodeByButtonId(buttonId) {
  * @param {boolean} isButtonClick - Whether this is from a button click
  * @returns {object} Formatted WhatsApp message payload
  */
-async function getNextNode(isFirstMessage, current_node_id, phoneNumber, isButtonClick = false) {
+async function getNextNode(isFirstMessage, current_node_id, phoneNumber, isButtonClick = false, flowId) {
   try {
     let node;
 
@@ -124,20 +114,20 @@ async function getNextNode(isFirstMessage, current_node_id, phoneNumber, isButto
 
       if (error) throw error;
       node = data;
-      
+
       // Create a new session for this flow
       if (node) {
         console.log(`📝 Creating new session for phone: ${phoneNumber}`);
-        
+
         // First, get or create contact
         const { data: existingContact } = await supabase
           .from('contacts')
           .select('*')
           .eq('phone_number', phoneNumber)
           .maybeSingle();
-        
+
         let contactId = existingContact?.id;
-        
+
         if (!existingContact) {
           const { data: newContact } = await supabase
             .from('contacts')
@@ -150,7 +140,7 @@ async function getNextNode(isFirstMessage, current_node_id, phoneNumber, isButto
           contactId = newContact?.id;
           console.log(`✅ Created new contact: ${contactId}`);
         }
-        
+
         // Create session
         const { data: newSession, error: sessionError } = await supabase
           .from('contact_sessions')
@@ -165,7 +155,7 @@ async function getNextNode(isFirstMessage, current_node_id, phoneNumber, isButto
           })
           .select()
           .single();
-        
+
         if (sessionError) {
           console.error(`❌ Error creating session:`, sessionError);
         } else {
@@ -176,7 +166,7 @@ async function getNextNode(isFirstMessage, current_node_id, phoneNumber, isButto
       // If this is a button click, find the node that contains this button
       console.log(`🔘 Button clicked with ID: ${current_node_id}`);
       const nodeWithButton = await findNodeByButtonId(current_node_id);
-      
+
       if (!nodeWithButton) {
         console.log(`❌ Could not find node with button ID: ${current_node_id}`);
         return null;
@@ -184,7 +174,7 @@ async function getNextNode(isFirstMessage, current_node_id, phoneNumber, isButto
 
       // Now get the next node from this node's connections
       const connections = nodeWithButton.connections || [];
-      
+
       if (connections.length === 0) {
         console.log(`⚠️ No connections found for node: ${nodeWithButton.id}`);
         return null;
@@ -194,12 +184,12 @@ async function getNextNode(isFirstMessage, current_node_id, phoneNumber, isButto
       const properties = typeof nodeWithButton.properties === 'string'
         ? JSON.parse(nodeWithButton.properties)
         : nodeWithButton.properties;
-      
+
       const buttons = properties?.buttons || [];
       const clickedButtonIndex = buttons.findIndex(btn => btn.btn_id === current_node_id);
-      
+
       console.log(`🔘 Clicked button index: ${clickedButtonIndex} (out of ${buttons.length} buttons)`);
-      
+
       if (clickedButtonIndex === -1) {
         console.log(`❌ Could not find which button was clicked with ID: ${current_node_id}`);
         return null;
@@ -208,7 +198,7 @@ async function getNextNode(isFirstMessage, current_node_id, phoneNumber, isButto
       // Find the connection that matches this button index
       // Use the LAST matching connection (most recent) in case there are duplicates
       const matchingConnections = connections.filter(conn => conn.buttonIndex === clickedButtonIndex);
-      
+
       if (matchingConnections.length === 0) {
         console.log(`❌ No connection found for button index: ${clickedButtonIndex}`);
         console.log(`Available connections:`, connections.map(c => `button ${c.buttonIndex} -> ${c.targetNodeId.substring(0, 8)}...`));
@@ -227,16 +217,16 @@ async function getNextNode(isFirstMessage, current_node_id, phoneNumber, isButto
         .select('id, name, type, flow_id')
         .eq('id', nextNodeId)
         .maybeSingle();
-      
+
       console.log(`🔍 Checking if node ${nextNodeId} exists:`, checkNode ? `YES - ${checkNode.type} "${checkNode.name}"` : 'NO');
-      
+
       if (!checkNode) {
         // List all nodes to help debug
         const { data: allNodes } = await supabase
           .from('nodes')
           .select('id, name, type, flow_id')
           .limit(20);
-        
+
         console.log(`📋 All nodes in database (${allNodes?.length || 0} total):`);
         allNodes?.forEach(n => {
           console.log(`  - ${n.id} (${n.type}) "${n.name}" [flow: ${n.flow_id}]`);
@@ -254,13 +244,13 @@ async function getNextNode(isFirstMessage, current_node_id, phoneNumber, isButto
         console.error(`❌ Error fetching next node:`, nextError);
         throw nextError;
       }
-      
+
       if (!nextNode) {
         console.error(`❌ Next node not found in database: ${nextNodeId}`);
         console.error(`⚠️ This usually means the flow hasn't been saved yet. Please save the flow in the builder!`);
         return null;
       }
-      
+
       node = nextNode;
     } else {
       console.log(`➡️ Moving to next node from: ${current_node_id}`);
@@ -280,7 +270,7 @@ async function getNextNode(isFirstMessage, current_node_id, phoneNumber, isButto
 
       // Get the next node from connections
       const connections = currentNode.connections || [];
-      
+
       if (connections.length === 0) {
         console.log(`⚠️ No connections found for node: ${current_node_id}`);
         return null;
@@ -288,7 +278,7 @@ async function getNextNode(isFirstMessage, current_node_id, phoneNumber, isButto
 
       // Get the first connection's target node
       const nextNodeId = connections[0].targetNodeId;
-      
+
       if (!nextNodeId) {
         console.log(`⚠️ No targetNodeId in connection`);
         return null;
@@ -307,7 +297,7 @@ async function getNextNode(isFirstMessage, current_node_id, phoneNumber, isButto
         console.error(`❌ Error fetching next node:`, nextError);
         throw nextError;
       }
-      
+
       if (!nextNode) {
         console.error(`❌ Next node not found in database: ${nextNodeId}`);
         console.error(`⚠️ This usually means the flow hasn't been saved yet. Please save the flow in the builder!`);
@@ -374,7 +364,7 @@ async function getNextNode(isFirstMessage, current_node_id, phoneNumber, isButto
     } else if (node.type === 'message') {
       // Simple text message - check if it has buttons
       const buttons = properties?.buttons || [];
-      
+
       if (buttons.length > 0) {
         console.log(`💬 Message node with ${buttons.length} buttons - will STOP after sending`);
         // Message with buttons - send and STOP (wait for user reply)
@@ -403,7 +393,7 @@ async function getNextNode(isFirstMessage, current_node_id, phoneNumber, isButto
         // Plain message without buttons - send and continue to next node
         const messageText = interpolateVariables(properties?.label || node.name || 'Hello 👋 How can I help you?', context);
         console.log(`📤 Sending message: "${messageText.substring(0, 50)}${messageText.length > 50 ? '...' : ''}"`);
-        
+
         const messagePayload = {
           messaging_product: 'whatsapp',
           to: phoneNumber,
@@ -412,11 +402,11 @@ async function getNextNode(isFirstMessage, current_node_id, phoneNumber, isButto
             body: messageText
           }
         };
-        
+
         // Send this message first
         await sendReply(messagePayload);
         console.log(`✅ Plain message sent, continuing to next node...`);
-        
+
         // Then get and return the next node
         return await getNextNode(false, node.id, phoneNumber);
       }
@@ -441,7 +431,7 @@ async function getNextNode(isFirstMessage, current_node_id, phoneNumber, isButto
 
         if (url) {
           console.log(`🌐 Making HTTP ${method || 'GET'} request to: ${url}`);
-          
+
           // Parse custom headers
           let customHeaders = {};
           if (headers) {
@@ -488,7 +478,7 @@ async function getNextNode(isFirstMessage, current_node_id, phoneNumber, isButto
 
           console.log(`✅ HTTP request completed with status ${response.status}`);
           console.log(`📥 Response data:`, JSON.stringify(response.data).substring(0, 200));
-          
+
           // Store response in session context if variable name provided
           if (responseVariable) {
             console.log(`💾 Saving response to variable: ${responseVariable}`);
@@ -511,7 +501,7 @@ async function getNextNode(isFirstMessage, current_node_id, phoneNumber, isButto
 
               await supabase
                 .from('contact_sessions')
-                .update({ 
+                .update({
                   context: updatedContext,
                   last_interaction_at: new Date().toISOString()
                 })
@@ -522,14 +512,14 @@ async function getNextNode(isFirstMessage, current_node_id, phoneNumber, isButto
             } else {
               console.log(`⚠️ No active session found to save variable`);
               console.log(`🔍 Attempting to create session for phone: ${phoneNumber}`);
-              
+
               // Try to create a session if it doesn't exist
               const { data: contact } = await supabase
                 .from('contacts')
                 .select('*')
                 .eq('phone_number', phoneNumber)
                 .maybeSingle();
-              
+
               if (contact) {
                 // Get the flow_id from the current node
                 const { data: currentNode } = await supabase
@@ -537,7 +527,7 @@ async function getNextNode(isFirstMessage, current_node_id, phoneNumber, isButto
                   .select('flow_id')
                   .eq('id', node.id)
                   .single();
-                
+
                 const { data: createdSession, error: createError } = await supabase
                   .from('contact_sessions')
                   .insert({
@@ -553,7 +543,7 @@ async function getNextNode(isFirstMessage, current_node_id, phoneNumber, isButto
                   })
                   .select()
                   .single();
-                
+
                 if (createError) {
                   console.error(`❌ Error creating session:`, createError);
                 } else {
@@ -565,10 +555,10 @@ async function getNextNode(isFirstMessage, current_node_id, phoneNumber, isButto
               }
             }
           }
-          
+
           // HTTP node doesn't send a message, continue to next node
           console.log(`🔄 HTTP node completed, moving to next node...`);
-          
+
           // Get the next node after this HTTP node
           return await getNextNode(false, node.id, phoneNumber);
         }
@@ -615,11 +605,11 @@ async function sendReply(messageContent) {
       }
     );
     console.log(`✅ Reply sent to ${messageContent.to}`);
-    
+
     // Store bot message in conversations table
     const phoneNumber = messageContent.to;
     let messageText = '';
-    
+
     // Extract message text based on message type
     if (messageContent.type === 'text') {
       messageText = messageContent.text?.body || '';
@@ -629,7 +619,7 @@ async function sendReply(messageContent) {
         const bodyText = messageContent.interactive.body?.text || '';
         const buttons = messageContent.interactive.action?.buttons || [];
         const buttonTexts = buttons.map(btn => btn.reply?.title).filter(Boolean);
-        
+
         if (buttonTexts.length > 0) {
           messageText = `${bodyText}\n\n${buttonTexts.map((text, idx) => `${idx + 1}. ${text}`).join('\n')}`;
         } else {
@@ -638,10 +628,10 @@ async function sendReply(messageContent) {
       } else if (messageContent.interactive?.type === 'list') {
         const bodyText = messageContent.interactive.body?.text || '';
         const sections = messageContent.interactive.action?.sections || [];
-        const listItems = sections.flatMap(section => 
+        const listItems = sections.flatMap(section =>
           (section.rows || []).map(row => row.title)
         ).filter(Boolean);
-        
+
         if (listItems.length > 0) {
           messageText = `${bodyText}\n\n${listItems.map((text, idx) => `${idx + 1}. ${text}`).join('\n')}`;
         } else {
@@ -649,13 +639,13 @@ async function sendReply(messageContent) {
         }
       }
     }
-    
+
     if (messageText && phoneNumber) {
       console.log(`[Webhook] Storing bot message: "${messageText.substring(0, 50)}..."`);
       await storeBotMessage(phoneNumber, messageText, null, null, null, 'sent');
       console.log(`[Webhook] ✓ Bot message stored in conversations`);
     }
-    
+
     return true;
   } catch (error) {
     console.error('❌ Error sending reply:', error.response?.data || error.message);
@@ -949,17 +939,17 @@ async function markMessageAsRead(messageId) {
 async function handleTemplateStatusUpdate(webhookData) {
   try {
     console.log('📋 Processing template status update webhook');
-    
+
     // Extract template status data from webhook
     const entry = webhookData.entry?.[0];
     const change = entry?.changes?.[0];
     const value = change?.value;
-    
+
     if (change?.field !== 'message_template_status_update') {
       console.log('⚠️ Not a template status update webhook');
       return;
     }
-    
+
     const {
       event,
       message_template_id,
@@ -967,30 +957,30 @@ async function handleTemplateStatusUpdate(webhookData) {
       message_template_language,
       reason
     } = value;
-    
+
     console.log(`📋 Template: ${message_template_name} (${message_template_id})`);
     console.log(`📋 Status: ${event}`);
     console.log(`📋 Reason: ${reason}`);
-    
+
     // Find template in database by meta_template_id
     const { data: template, error: fetchError } = await supabase
       .from('templates')
       .select('*')
       .eq('meta_template_id', String(message_template_id))
       .maybeSingle();
-    
+
     if (fetchError) {
       console.error('❌ Error fetching template:', fetchError);
       return;
     }
-    
+
     if (!template) {
       console.log(`⚠️ Template not found in database: ${message_template_id}`);
       return;
     }
-    
+
     console.log(`✅ Found template in database: ${template.id} (${template.name})`);
-    
+
     // Update template status
     const { error: updateError } = await supabase
       .from('templates')
@@ -999,14 +989,14 @@ async function handleTemplateStatusUpdate(webhookData) {
         updated_at: new Date().toISOString(),
       })
       .eq('id', template.id);
-    
+
     if (updateError) {
       console.error('❌ Error updating template status:', updateError);
       return;
     }
-    
+
     console.log(`✅ Template status updated: ${template.status} -> ${event}`);
-    
+
   } catch (error) {
     console.error('❌ Error handling template status update:', error);
   }
@@ -1018,6 +1008,7 @@ async function handleTemplateStatusUpdate(webhookData) {
 export const handleWhatsAppWebhook = async (req, res) => {
   try {
     const body = req.body;
+    let flowId = 'd0adc94d-a85e-44c9-8dfa-0bab5fcd5d9e';
     // Store webhook data to db.json
     // storeWebhookData(body);
 
@@ -1030,7 +1021,7 @@ export const handleWhatsAppWebhook = async (req, res) => {
         await handleTemplateStatusUpdate(body);
         return res.sendStatus(200);
       }
-      
+
       // Loop through entries for regular messages
       for (const entry of body.entry) {
         const changes = entry.changes;
@@ -1052,12 +1043,12 @@ export const handleWhatsAppWebhook = async (req, res) => {
             if (messageType === 'text') {
               // User sent a text message - send welcome buttons
               console.log(`💬 Text message: ${message.text.body}`);
-              
+
               // Store user message in conversations
               await storeUserMessage(from, message.text.body);
 
               if (message.text.body.toLowerCase().includes('hi') || message.text.body.toLowerCase().includes('hello')) {
-                messageContent = await getNextNode(true, null, from);
+                messageContent = await getNextNode(true, null, from, false, flowId);
               } else {
                 await sendTextMessage(from, "Sorry, I didn't understand that. Please type 'Hi' or 'Hello' to see options.");
               }
@@ -1086,11 +1077,11 @@ export const handleWhatsAppWebhook = async (req, res) => {
               const buttonId = message.interactive.button_reply.id;
               const buttonText = message.interactive.button_reply.title;
               console.log(`🔘 Button clicked: ${buttonId}`);
-              
+
               // Store user button click in conversations
               await storeUserMessage(from, buttonText);
-              
-              messageContent = await getNextNode(false, buttonId, from, true); // true = isButtonClick
+
+              messageContent = await getNextNode(false, buttonId, from, true, flowId); // true = isButtonClick
 
 
 
@@ -1240,63 +1231,79 @@ export const verifyWebhook = (req, res) => {
 export const triggerFlow = async (req, res) => {
   try {
     const { flowId } = req.params;
-    const { phoneNumber, data } = req.body;
+    const body = req.body;
 
-    if (!phoneNumber) {
-      res.status(400).json({
-        success: false,
-        error: 'phoneNumber is required'
-      });
-      return;
+    // Store webhook data to db.json
+    // storeWebhookData(body);
+
+    // Check if this is a WhatsApp message event
+    if (body.object === 'whatsapp_business_account') {
+      // Check if this is a template status update
+      const firstChange = body.entry?.[0]?.changes?.[0];
+      if (firstChange?.field === 'message_template_status_update') {
+        console.log('📋 Received template status update webhook');
+        await handleTemplateStatusUpdate(body);
+        return res.sendStatus(200);
+      }
+
+      // Loop through entries for regular messages
+      for (const entry of body.entry) {
+        const changes = entry.changes;
+
+        for (const change of changes) {
+          const value = change.value;
+
+          // Check if there are messages
+          if (value.messages && value.messages.length > 0) {
+            const message = value.messages[0];
+            const from = message.from;
+            const messageType = message.type;
+            const messageId = message.id;
+            let messageContent = null;
+
+            console.log(`📩 Received message from ${from}, type: ${messageType}`);
+            // Handle different message types
+            if (messageType === 'text') {
+              // User sent a text message - send welcome buttons
+              console.log(`💬 Text message: ${message.text.body}`);
+
+              // Store user message in conversations
+              await storeUserMessage(from, message.text.body);
+
+              if (message.text.body.toLowerCase().includes('hi') || message.text.body.toLowerCase().includes('hello')) {
+                messageContent = await getNextNode(true, null, from, false, flowId);
+              } else {
+                await sendTextMessage(from, "Sorry, I didn't understand that. Please type 'Hi' or 'Hello' to see options.");
+              }
+
+            } else if (messageType === 'interactive') {
+              // User clicked a button
+              const buttonId = message.interactive.button_reply.id;
+              const buttonText = message.interactive.button_reply.title;
+              console.log(`🔘 Button clicked: ${buttonId}`);
+
+              // Store user button click in conversations
+              await storeUserMessage(from, buttonText);
+
+              messageContent = await getNextNode(false, buttonId, from, true, flowId); // true = isButtonClick
+            }
+            if (messageContent) {
+              // storeWebhookData(messageContent);
+              sendReply(messageContent);
+            }
+            // Mark message as read
+            await markMessageAsRead(messageId);
+          }
+        }
+      }
     }
 
-    console.log(`[Webhook Trigger] Flow ${flowId} triggered for ${phoneNumber}`);
-
-    // Start the flow directly
-    await FlowEngine.startFlow(phoneNumber, flowId, data || {});
-
-    // Small delay to ensure message is logged
-    await new Promise(resolve => setTimeout(resolve, 100));
-
-    // Get session info
-    const session = await FlowEngine.getSession(phoneNumber);
-
-    // Get the last message sent to this phone number
-    const { data: lastMessage } = await supabase
-      .from('message_logs')
-      .select('*')
-      .eq('phone_number', phoneNumber)
-      .order('sent_at', { ascending: false })
-      .limit(1)
-      .maybeSingle();
-
-    console.log('[Webhook Trigger] Last message:', lastMessage);
-
-    res.status(200).json({
-      success: true,
-      message: 'Flow triggered successfully',
-      flowId: flowId,
-      phoneNumber: phoneNumber,
-      session: session ? {
-        id: session.id,
-        flowId: session.flow_id,
-        currentNodeId: session.current_node_id,
-        status: session.status,
-        context: session.context
-      } : null,
-      botResponse: lastMessage ? {
-        content: lastMessage.content,
-        type: lastMessage.message_type,
-        sentAt: lastMessage.sent_at
-      } : null
-    });
-
+    // Always respond with 200 to acknowledge receipt
+    res.sendStatus(200);
   } catch (error) {
-    console.error('[Webhook Trigger] Error:', error);
-    res.status(500).json({
-      success: false,
-      error: error.message
-    });
+    console.error('❌ Error processing webhook:', error);
+    // Still send 200 to prevent Meta from retrying
+    res.sendStatus(200);
   }
 };
 

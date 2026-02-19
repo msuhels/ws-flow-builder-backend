@@ -23,10 +23,6 @@ export const getDashboardStats = async (req, res) => {
       .select('*', { count: 'exact', head: true })
       .gte('sent_at', startOfDay.toISOString());
     
-    const totalContactsPromise = supabase
-      .from('contacts')
-      .select('*', { count: 'exact', head: true });
-    
     // For delivery status, we fetch status column of all logs (or maybe limit to recent ones if too many)
     const deliveryStatusPromise = supabase
       .from('message_logs')
@@ -36,13 +32,11 @@ export const getDashboardStats = async (req, res) => {
       { count: totalFlows },
       { count: activeFlows },
       { count: messagesSentToday },
-      { count: totalContacts },
       { data: statusLogs }
     ] = await Promise.all([
       totalFlowsPromise,
       activeFlowsPromise,
       messagesSentTodayPromise,
-      totalContactsPromise,
       deliveryStatusPromise
     ]);
 
@@ -61,7 +55,6 @@ export const getDashboardStats = async (req, res) => {
         totalFlows: totalFlows || 0,
         activeFlows: activeFlows || 0,
         messagesSentToday: messagesSentToday || 0,
-        totalContacts: totalContacts || 0,
         deliveryStatus: deliveryStatusMap,
       },
     });
