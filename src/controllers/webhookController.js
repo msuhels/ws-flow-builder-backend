@@ -18,36 +18,6 @@ const WHATSAPP_API_URL = `https://graph.facebook.com/v22.0/${PHONE_NUMBER_ID}/me
 const DB_JSON_PATH = path.join(__dirname, '..', 'db.json');
 
 /**
- * Find the node that contains a specific button ID
- * @param {string} buttonId - The button ID to search for
- * @returns {object|null} The node containing this button
- */
-async function findNodeByButtonId(buttonId) {
-  try {
-    console.log(`🔍 Searching for node with button ID: ${buttonId}`);
-
-    // Query directly using JSONB contains operator
-    const { data: nodes, error } = await supabase
-      .from('nodes')
-      .select('*')
-      .contains('properties->buttons', [{ btn_id: buttonId }]);
-
-    if (error) throw error;
-
-    if (nodes && nodes.length > 0) {
-      console.log(`✅ Found button in node: ${nodes[0].id} (${nodes[0].type})`);
-      return nodes[0];
-    }
-
-    console.log(`❌ No node found with button ID: ${buttonId}`);
-    return null;
-  } catch (error) {
-    console.error('Error finding node by button ID:', error);
-    return null;
-  }
-}
-
-/**
  * Get next node and format for WhatsApp (Stateless - no session tracking)
  */
 async function getNextNode(isFirstMessage, current_node_id, phoneNumber, isButtonClick = false, flowId) {
@@ -66,102 +36,10 @@ async function getNextNode(isFirstMessage, current_node_id, phoneNumber, isButto
       if (error) throw error;
       node = data;
     } else if (isButtonClick) {
-      // If this is a button click, find the node that contains this button
-      console.log(`� Button clicked with ID: ${current_node_id}`);
-      const nodeWithButton = await findNodeByButtonId(current_node_id);
-
-      if (!nodeWithButton) {
-        console.log(`❌ Could not find node with button ID: ${current_node_id}`);
-        return null;
-      }
-
-      // Now get the next node from this node's connections
-      const connections = nodeWithButton.connections || [];
-
-      if (connections.length === 0) {
-        console.log(`⚠️ No connections found for node: ${nodeWithButton.id}`);
-        return null;
-      }
-
-      // Find which button was clicked
-      const properties = typeof nodeWithButton.properties === 'string'
-        ? JSON.parse(nodeWithButton.properties)
-        : nodeWithButton.properties;
-
-      const buttons = properties?.buttons || [];
-      const clickedButtonIndex = buttons.findIndex(btn => btn.btn_id === current_node_id);
-
-      console.log(`🔘 Clicked button index: ${clickedButtonIndex} (out of ${buttons.length} buttons)`);
-
-      if (clickedButtonIndex === -1) {
-        console.log(`❌ Could not find which button was clicked with ID: ${current_node_id}`);
-        return null;
-      }
-
-      // Find the connection that matches this button index
-      const matchingConnections = connections.filter(conn => conn.buttonIndex === clickedButtonIndex);
-
-      if (matchingConnections.length === 0) {
-        console.log(`❌ No connection found for button index: ${clickedButtonIndex}`);
-        return null;
-      }
-
-      const matchingConnection = matchingConnections[matchingConnections.length - 1];
-      const nextNodeId = matchingConnection.targetNodeId;
-      console.log(`🔗 Moving from button ${clickedButtonIndex} to ${nextNodeId}`);
-
-      // Fetch the next node
       const { data: nextNode, error: nextError } = await supabase
         .from('nodes')
         .select('*')
-        .eq('id', nextNodeId)
-        .maybeSingle();
-
-      if (nextError) throw nextError;
-      if (!nextNode) {
-        console.error(`❌ Next node not found: ${nextNodeId}`);
-        return null;
-      }
-
-      node = nextNode;
-    } else {
-      console.log(`➡️ Moving to next node from: ${current_node_id}`);
-      // Get the current node to find its connections
-      const { data: currentNode, error: currentError } = await supabase
-        .from('nodes')
-        .select('*')
-        .eq('id', current_node_id)
-        .maybeSingle();
-
-      if (currentError) throw currentError;
-
-      if (!currentNode) {
-        console.log(`❌ Current node not found: ${current_node_id}`);
-        return null;
-      }
-
-      // Get the next node from connections
-      const connections = currentNode.connections || [];
-
-      if (connections.length === 0) {
-        console.log(`⚠️ No connections found for node: ${current_node_id}`);
-        return null;
-      }
-
-      const nextNodeId = connections[0].targetNodeId;
-
-      if (!nextNodeId) {
-        console.log(`⚠️ No targetNodeId in connection`);
-        return null;
-      }
-
-      console.log(`🔗 Moving from node ${current_node_id} to ${nextNodeId}`);
-
-      // Fetch the next node
-      const { data: nextNode, error: nextError } = await supabase
-        .from('nodes')
-        .select('*')
-        .eq('id', nextNodeId)
+        .eq('previous_node_id', current_node_id)
         .maybeSingle();
 
       if (nextError) throw nextError;
