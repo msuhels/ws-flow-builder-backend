@@ -30,7 +30,8 @@ async function getNextNode(isFirstMessage, current_node_id, phoneNumber, isButto
       const { data, error } = await supabase
         .from('nodes')
         .select('*')
-        .eq('id', '4d01c7af-4e22-46ba-82cb-8c710344de29')
+        .eq('flow_id', flowId)
+        .is('previous_node_id', null)
         .maybeSingle();
 
       if (error) throw error;
@@ -39,6 +40,7 @@ async function getNextNode(isFirstMessage, current_node_id, phoneNumber, isButto
       const { data: nextNode, error: nextError } = await supabase
         .from('nodes')
         .select('*')
+        .eq('flow_id', flowId)
         .eq('previous_node_id', current_node_id)
         .maybeSingle();
 
@@ -91,50 +93,16 @@ async function getNextNode(isFirstMessage, current_node_id, phoneNumber, isButto
       };
     } else if (node.type === 'message') {
       // Simple text message - check if it has buttons
-      const buttons = properties?.buttons || [];
+      const messageText = properties?.label || node.name || 'Hello 👋';
 
-      if (buttons.length > 0) {
-        console.log(`� Message node with ${buttons.length} buttons`);
-        return {
-          messaging_product: 'whatsapp',
-          to: phoneNumber,
-          type: 'interactive',
-          interactive: {
-            type: 'button',
-            body: {
-              text: properties?.label || node.name || 'Choose an option'
-            },
-            action: {
-              buttons: buttons.slice(0, 3).map((btn) => ({
-                type: 'reply',
-                reply: {
-                  id: btn.btn_id,
-                  title: btn.text
-                }
-              }))
-            }
-          }
-        };
-      } else {
-        console.log(`💬 Plain message node - will auto-continue`);
-        const messageText = properties?.label || node.name || 'Hello 👋';
-
-        const messagePayload = {
-          messaging_product: 'whatsapp',
-          to: phoneNumber,
-          type: 'text',
-          text: {
-            body: messageText
-          }
-        };
-
-        // Send this message first
-        await sendReply(messagePayload);
-        console.log(`✅ Plain message sent, continuing to next node...`);
-
-        // Then get and return the next node
-        return await getNextNode(false, node.id, phoneNumber);
-      }
+      return {
+        messaging_product: 'whatsapp',
+        to: phoneNumber,
+        type: 'text',
+        text: {
+          body: messageText
+        }
+      };
     } else if (node.type === 'http') {
       // HTTP Request node - make API call (no variable storage without sessions)
       console.log(`🌐 HTTP node - making API request`);
@@ -152,6 +120,8 @@ async function getNextNode(isFirstMessage, current_node_id, phoneNumber, isButto
           headers,
           timeout
         } = properties;
+
+        let httpResponse = null;
 
         if (url) {
           console.log(`🌐 Making HTTP ${method || 'GET'} request to: ${url}`);
@@ -185,7 +155,7 @@ async function getNextNode(isFirstMessage, current_node_id, phoneNumber, isButto
           }
 
           // Make HTTP request
-          const response = await axios({
+          httpResponse = await axios({
             method: method || 'GET',
             url: url,
             data: requestBody,
@@ -194,14 +164,20 @@ async function getNextNode(isFirstMessage, current_node_id, phoneNumber, isButto
             validateStatus: () => true
           });
 
-          console.log(`✅ HTTP request completed with status ${response.status}`);
+          console.log(`✅ HTTP request completed with status ${httpResponse.status}`);
         }
+        return {
+          messaging_product: 'whatsapp',
+          to: phoneNumber,
+          type: 'text',
+          text: {
+            body: JSON.stringify(properties?.data) || 'Message'
+          }
+        };
       } catch (error) {
         console.error('❌ HTTP request failed:', error.message);
       }
 
-      // HTTP node doesn't send a message, continue to next node
-      return await getNextNode(false, node.id, phoneNumber);
     } else {
       // Default to text message for other types
       return {
