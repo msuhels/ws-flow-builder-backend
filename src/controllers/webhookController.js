@@ -18,6 +18,30 @@ const WHATSAPP_API_URL = `https://graph.facebook.com/v22.0/${PHONE_NUMBER_ID}/me
 const DB_JSON_PATH = path.join(__dirname, '..', 'db.json');
 
 /**
+ * Replace placeholders like {{variable.path}} with actual values
+ */
+function replacePlaceholders(text, variableName, data) {
+  if (!text || typeof text !== 'string') return text;
+  
+  const regex = new RegExp(`\\{\\{${variableName}\\.([^}]+)\\}\\}`, 'g');
+  
+  return text.replace(regex, (match, path) => {
+    const keys = path.split('.');
+    let value = data;
+    
+    for (const key of keys) {
+      if (value && typeof value === 'object' && key in value) {
+        value = value[key];
+      } else {
+        return match;
+      }
+    }
+    
+    return value !== undefined ? String(value) : match;
+  });
+}
+
+/**
  * Get next node and format for WhatsApp (Stateless - no session tracking)
  */
 async function getNextNode(isFirstMessage, current_node_id, phoneNumber, isButtonClick = false, flowId) {
@@ -104,7 +128,7 @@ async function getNextNode(isFirstMessage, current_node_id, phoneNumber, isButto
         }
       };
     } else if (node.type === 'http') {
-      // HTTP Request node - make API call (no variable storage without sessions)
+      // HTTP Request node - make API call and process next node
       console.log(`🌐 HTTP node - making API request`);
       try {
         const {
@@ -118,10 +142,11 @@ async function getNextNode(isFirstMessage, current_node_id, phoneNumber, isButto
           apiKeyValue,
           body,
           headers,
-          timeout
+          timeout,
+          responseVariable
         } = properties;
 
-        let httpResponse = null;
+        let responseToWhatsapp = null
 
         if (url) {
           console.log(`🌐 Making HTTP ${method || 'GET'} request to: ${url}`);
@@ -155,7 +180,7 @@ async function getNextNode(isFirstMessage, current_node_id, phoneNumber, isButto
           }
 
           // Make HTTP request
-          httpResponse = await axios({
+          const httpResponse = await axios({
             method: method || 'GET',
             url: url,
             data: requestBody,
@@ -165,17 +190,92 @@ async function getNextNode(isFirstMessage, current_node_id, phoneNumber, isButto
           });
 
           console.log(`✅ HTTP request completed with status ${httpResponse.status}`);
+
+          // If responseVariable exists, fetch next node and replace placeholders
+          if (responseVariable) {
+            const { data: nextNode, error: nextError } = await supabase
+              .from('nodes')
+              .select('*')
+              .eq('flow_id', flowId)
+              .eq('previous_node_id', node.node_id)
+              .maybeSingle();
+
+            if (nextError) {
+              console.error('❌ Error fetching next node:', nextError);
+            } else if (nextNode) {
+              console.log(`➡️ Found next node: ${nextNode.id} (${nextNode.type})`);
+              
+              const nextProperties = typeof nextNode.properties === 'string'
+                ? JSON.parse(nextNode.properties)
+                : nextNode.properties;
+
+              // Replace placeholders in label with API response data
+              if (nextProperties?.label) {
+                const replacedLabel = replacePlaceholders(
+                  nextProperties.label, 
+                  responseVariable, 
+                  httpResponse.data
+                );
+                console.log(`🔄 Replaced: "${nextProperties.label}" → "${replacedLabel}"`);
+
+                // Return next node message with replaced values
+                if (nextNode.type === 'message') {
+                  responseToWhatsapp = {
+                    messaging_product: 'whatsapp',
+                    to: phoneNumber,
+                    type: 'text',
+                    text: {
+                      body: replacedLabel
+                    }
+                  };
+                } else if (nextNode.type === 'button') {
+                  const buttons = nextProperties?.buttons || [];
+                  responseToWhatsapp = {
+                    messaging_product: 'whatsapp',
+                    to: phoneNumber,
+                    type: 'interactive',
+                    interactive: {
+                      type: 'button',
+                      body: {
+                        text: replacedLabel
+                      },
+                      action: {
+                        buttons: buttons.slice(0, 3).map((btn) => ({
+                          type: 'reply',
+                          reply: {
+                            id: btn.btn_id,
+                            title: btn.text
+                          }
+                        }))
+                      }
+                    }
+                  };
+                }
+              }
+            }
+          }
         }
+
+        let ifNotNextNode = {
+          messaging_product: 'whatsapp',
+          to: phoneNumber,
+          type: 'text',
+          text: {
+            body: 'Variable not handle'
+          }
+        };
+
+        return responseToWhatsapp || ifNotNextNode;
+      } catch (error) {
+        console.error('❌ HTTP request failed:', error.message);
         return {
           messaging_product: 'whatsapp',
           to: phoneNumber,
           type: 'text',
           text: {
-            body: JSON.stringify(properties?.data) || 'Message'
+            body: 'HTTP request failed'
           }
         };
-      } catch (error) {
-        console.error('❌ HTTP request failed:', error.message);
       }
 
     } else {
