@@ -134,6 +134,7 @@ async function getNextNode(isFirstMessage, current_node_id, phoneNumber, isButto
 
       sendReply(messageContent, flowId, node?.id);
       let getNextNodeResponse = await getNextNode(false, node?.node_id, phoneNumber, false, flowId);
+      console.log(getNextNodeResponse, "message next recuesion")
       return getNextNodeResponse;
     } else if (node.type === 'http') {
       // HTTP Request node - make API call and process next node
@@ -547,6 +548,7 @@ export const handleWhatsAppWebhook = async (req, res) => {
 
               if (message.text.body.toLowerCase().includes('hi') || message.text.body.toLowerCase().includes('hello')) {
                 ({ messageContent, currentNodeId } = await getNextNode(true, null, from, false, flowId));
+                console.log(messageContent, currentNodeId, "after hi")
               } else {
                 const { data: lastMessage, error } = await supabase
                   .from('conversations')
