@@ -133,9 +133,7 @@ async function getNextNode(isFirstMessage, current_node_id, phoneNumber, isButto
       };
 
       sendReply(messageContent, flowId, node?.id);
-      console.log(false, node?.node_id, phoneNumber, true, flowId, 'ddfdf')
       let getNextNodeResponse = await getNextNode(false, node?.node_id, phoneNumber, true, flowId);
-      console.log(getNextNodeResponse, "message next recuesion")
       return getNextNodeResponse;
     } else if (node.type === 'http') {
       // HTTP Request node - make API call and process next node
@@ -331,16 +329,16 @@ async function getNextNode(isFirstMessage, current_node_id, phoneNumber, isButto
     }
   } catch (error) {
     console.error('Error getting next node:', error);
-    let messageContent = {
-      messaging_product: 'whatsapp',
-      to: phoneNumber,
-      type: 'text',
-      text: {
-        body: 'Sorry, something went wrong. Please try again.'
-      }
-    };
+    // let messageContent = {
+    //   messaging_product: 'whatsapp',
+    //   to: phoneNumber,
+    //   type: 'text',
+    //   text: {
+    //     body: 'Sorry, something went wrong. Please try again.'
+    //   }
+    // };
     return {
-      messageContent,
+      messageContent: null,
       currentNodeId: null
     }
   }
@@ -549,7 +547,6 @@ export const handleWhatsAppWebhook = async (req, res) => {
 
               if (message.text.body.toLowerCase().includes('hi') || message.text.body.toLowerCase().includes('hello')) {
                 ({ messageContent, currentNodeId } = await getNextNode(true, null, from, false, flowId));
-                console.log(messageContent, currentNodeId, "after hi")
               } else {
                 const { data: lastMessage, error } = await supabase
                   .from('conversations')
