@@ -22,13 +22,13 @@ const DB_JSON_PATH = path.join(__dirname, '..', 'db.json');
  */
 function replacePlaceholders(text, variableName, data) {
   if (!text || typeof text !== 'string') return text;
-  
+
   const regex = new RegExp(`\\{\\{${variableName}\\.([^}]+)\\}\\}`, 'g');
-  
+
   return text.replace(regex, (match, path) => {
     const keys = path.split('.');
     let value = data;
-    
+
     for (const key of keys) {
       if (value && typeof value === 'object' && key in value) {
         value = value[key];
@@ -36,7 +36,7 @@ function replacePlaceholders(text, variableName, data) {
         return match;
       }
     }
-    
+
     return value !== undefined ? String(value) : match;
   });
 }
@@ -71,7 +71,7 @@ async function getNextNode(isFirstMessage, current_node_id, phoneNumber, isButto
       if (nextError) throw nextError;
       if (!nextNode) {
         console.error(`❌ Next node not found: ${nextNodeId}`);
-        return null;
+        return { messageContent: null, currentNodeId: null };
       }
 
       node = nextNode;
@@ -79,7 +79,7 @@ async function getNextNode(isFirstMessage, current_node_id, phoneNumber, isButto
 
     if (!node) {
       console.log(`⛔ No next node found, end of flow`);
-      return null;
+      return { messageContent: null, currentNodeId: null };
     }
 
     console.log(`📍 Processing node: ${node.id} (${node.type}) - "${node.name}"`);
@@ -95,7 +95,7 @@ async function getNextNode(isFirstMessage, current_node_id, phoneNumber, isButto
       const buttons = properties?.buttons || [];
       console.log(`🔘 Button node with ${buttons.length} buttons`);
 
-      return {
+      let messageContent = {
         messaging_product: 'whatsapp',
         to: phoneNumber,
         type: 'interactive',
@@ -115,11 +115,15 @@ async function getNextNode(isFirstMessage, current_node_id, phoneNumber, isButto
           }
         }
       };
+      return {
+        messageContent,
+        currentNodeId: node?.id || null
+      }
     } else if (node.type === 'message') {
       // Simple text message - check if it has buttons
       const messageText = properties?.label || node.name || 'Hello 👋';
 
-      return {
+      let messageContent = {
         messaging_product: 'whatsapp',
         to: phoneNumber,
         type: 'text',
@@ -127,6 +131,10 @@ async function getNextNode(isFirstMessage, current_node_id, phoneNumber, isButto
           body: messageText
         }
       };
+
+      sendReply(messageContent, flowId, node?.id);
+      let getNextNodeResponse = await getNextNode(false, node?.node_id, phoneNumber, false, flowId);
+      return getNextNodeResponse;
     } else if (node.type === 'http') {
       // HTTP Request node - make API call and process next node
       console.log(`🌐 HTTP node - making API request`);
@@ -204,7 +212,7 @@ async function getNextNode(isFirstMessage, current_node_id, phoneNumber, isButto
               console.error('❌ Error fetching next node:', nextError);
             } else if (nextNode) {
               console.log(`➡️ Found next node: ${nextNode.id} (${nextNode.type})`);
-              
+
               const nextProperties = typeof nextNode.properties === 'string'
                 ? JSON.parse(nextNode.properties)
                 : nextNode.properties;
@@ -212,8 +220,8 @@ async function getNextNode(isFirstMessage, current_node_id, phoneNumber, isButto
               // Replace placeholders in label with API response data
               if (nextProperties?.label) {
                 const replacedLabel = replacePlaceholders(
-                  nextProperties.label, 
-                  responseVariable, 
+                  nextProperties.label,
+                  responseVariable,
                   httpResponse.data
                 );
                 console.log(`🔄 Replaced: "${nextProperties.label}" → "${replacedLabel}"`);
@@ -264,11 +272,13 @@ async function getNextNode(isFirstMessage, current_node_id, phoneNumber, isButto
             body: 'Variable not handle'
           }
         };
-
-        return responseToWhatsapp || ifNotNextNode;
+        return {
+          messageContent: responseToWhatsapp || ifNotNextNode,
+          currentNodeId: responseToWhatsapp ? node?.id : null
+        }
       } catch (error) {
         console.error('❌ HTTP request failed:', error.message);
-        return {
+        let messageContent = {
           messaging_product: 'whatsapp',
           to: phoneNumber,
           type: 'text',
@@ -276,11 +286,27 @@ async function getNextNode(isFirstMessage, current_node_id, phoneNumber, isButto
             body: 'HTTP request failed'
           }
         };
+        return {
+          messageContent,
+          currentNodeId: null
+        }
       }
 
+    } else if (node.type === 'input') {
+      const messageText = properties?.label || node.name || 'Hello 👋';
+
+      let messageContent = {
+        messaging_product: 'whatsapp',
+        to: phoneNumber,
+        type: 'text',
+        text: {
+          body: messageText
+        }
+      };
+      return { messageContent, currentNodeId: node?.id || null }
     } else {
       // Default to text message for other types
-      return {
+      let messageContent = {
         messaging_product: 'whatsapp',
         to: phoneNumber,
         type: 'text',
@@ -288,10 +314,14 @@ async function getNextNode(isFirstMessage, current_node_id, phoneNumber, isButto
           body: properties?.label || node.name || 'Message'
         }
       };
+      return {
+        messageContent,
+        currentNodeId: node?.id || null
+      }
     }
   } catch (error) {
     console.error('Error getting next node:', error);
-    return {
+    let messageContent = {
       messaging_product: 'whatsapp',
       to: phoneNumber,
       type: 'text',
@@ -299,10 +329,14 @@ async function getNextNode(isFirstMessage, current_node_id, phoneNumber, isButto
         body: 'Sorry, something went wrong. Please try again.'
       }
     };
+    return {
+      messageContent,
+      currentNodeId: null
+    }
   }
 }
 
-async function sendReply(messageContent) {
+async function sendReply(messageContent, flow_id, node_id) {
   try {
     await axios.post(
       WHATSAPP_API_URL,
@@ -321,7 +355,7 @@ async function sendReply(messageContent) {
     let messageText = '';
 
     // Extract message text based on message type
-    if (messageContent.type === 'text') {
+    if (messageContent.type === 'text' || messageContent.type === 'input') {
       messageText = messageContent.text?.body || '';
     } else if (messageContent.type === 'interactive') {
       if (messageContent.interactive?.type === 'button') {
@@ -338,7 +372,7 @@ async function sendReply(messageContent) {
     }
 
     if (messageText && phoneNumber) {
-      await storeBotMessage(phoneNumber, messageText, null, null, null, 'sent');
+      await storeBotMessage(phoneNumber, messageText, flow_id, node_id, null, 'sent');
     }
 
     return true;
@@ -473,7 +507,7 @@ async function handleTemplateStatusUpdate(webhookData) {
 export const handleWhatsAppWebhook = async (req, res) => {
   try {
     const body = req.body;
-    let flowId = 'd0adc94d-a85e-44c9-8dfa-0bab5fcd5d9e';
+    let flowId = '2ef6b284-6a6b-4e7a-927a-497ee29d6cb3';
 
     storeWebhookData(body);
 
@@ -495,7 +529,7 @@ export const handleWhatsAppWebhook = async (req, res) => {
             const from = message.from;
             const messageType = message.type;
             const messageId = message.id;
-            let messageContent = null;
+            let { messageContent, currentNodeId } = { messageContent: null, currentNodeId: null };
 
             console.log(`📩 Received message from ${from}, type: ${messageType}`);
 
@@ -504,9 +538,35 @@ export const handleWhatsAppWebhook = async (req, res) => {
               await storeUserMessage(from, message.text.body);
 
               if (message.text.body.toLowerCase().includes('hi') || message.text.body.toLowerCase().includes('hello')) {
-                messageContent = await getNextNode(true, null, from, false, flowId);
+                ({ messageContent, currentNodeId } = await getNextNode(true, null, from, false, flowId));
               } else {
-                await sendTextMessage(from, "Sorry, I didn't understand that. Please type 'Hi' or 'Hello' to see options.");
+                const { data: lastMessage, error } = await supabase
+                  .from('conversations')
+                  .select('*')
+                  .eq('phone_number', from)
+                  .eq('flow_id', flowId)
+                  .eq('message_type', 'bot')
+                  .order('created_at', { ascending: false })
+                  .limit(1)
+                  .maybeSingle();
+
+                if (error) {
+                  console.error('❌ Error fetching last bot conversation:', error);
+                  await sendTextMessage(from, "Sorry, I didn't understand that. Please type 'Hi' or 'Hello' to see options.");
+                }
+
+                const { data: nextNode, error: nextError } = await supabase
+                  .from('nodes')
+                  .select('*')
+                  .eq('id', lastMessage.node_id)
+                  .maybeSingle();
+
+                if (nextNode?.type == 'input') {
+                  ({ messageContent, currentNodeId } = await getNextNode(false, nextNode?.node_id, from, true, flowId));
+                } else {
+                  await sendTextMessage(from, "Sorry, I didn't understand that. Please type 'Hi' or 'Hello' to see options.");
+                }
+
               }
             } else if (messageType === 'interactive') {
               const buttonId = message.interactive.button_reply.id;
@@ -514,11 +574,11 @@ export const handleWhatsAppWebhook = async (req, res) => {
               console.log(`� Button clicked: ${buttonId}`);
 
               await storeUserMessage(from, buttonText);
-              messageContent = await getNextNode(false, buttonId, from, true, flowId);
+              ({ messageContent, currentNodeId } = await getNextNode(false, buttonId, from, true, flowId));
             }
 
             if (messageContent) {
-              sendReply(messageContent);
+              sendReply(messageContent, flowId, currentNodeId);
             }
 
             await markMessageAsRead(messageId);
@@ -622,7 +682,7 @@ export const triggerFlow = async (req, res) => {
             const from = message.from;
             const messageType = message.type;
             const messageId = message.id;
-            let messageContent = null;
+            let { messageContent, currentNodeId } = { messageContent: null, currentNodeId: null };
 
             console.log(`📩 Received message from ${from}, type: ${messageType}`);
 
@@ -631,9 +691,35 @@ export const triggerFlow = async (req, res) => {
               await storeUserMessage(from, message.text.body);
 
               if (message.text.body.toLowerCase().includes('hi') || message.text.body.toLowerCase().includes('hello')) {
-                messageContent = await getNextNode(true, null, from, false, flowId);
+                ({ messageContent, currentNodeId } = await getNextNode(true, null, from, false, flowId));
               } else {
-                await sendTextMessage(from, "Sorry, I didn't understand that. Please type 'Hi' or 'Hello' to see options.");
+                const { data: lastMessage, error } = await supabase
+                  .from('conversations')
+                  .select('*')
+                  .eq('phone_number', from)
+                  .eq('flow_id', flowId)
+                  .eq('message_type', 'bot')
+                  .order('created_at', { ascending: false })
+                  .limit(1)
+                  .maybeSingle();
+
+                if (error) {
+                  console.error('❌ Error fetching last bot conversation:', error);
+                  await sendTextMessage(from, "Sorry, I didn't understand that. Please type 'Hi' or 'Hello' to see options.");
+                }
+
+                const { data: nextNode, error: nextError } = await supabase
+                  .from('nodes')
+                  .select('*')
+                  .eq('id', lastMessage.node_id)
+                  .maybeSingle();
+
+                if (nextNode?.type == 'input') {
+                  ({ messageContent, currentNodeId } = await getNextNode(false, nextNode?.node_id, from, true, flowId));
+                } else {
+                  await sendTextMessage(from, "Sorry, I didn't understand that. Please type 'Hi' or 'Hello' to see options.");
+                }
+
               }
             } else if (messageType === 'interactive') {
               const buttonId = message.interactive.button_reply.id;
@@ -641,11 +727,11 @@ export const triggerFlow = async (req, res) => {
               console.log(`🔘 Button clicked: ${buttonId}`);
 
               await storeUserMessage(from, buttonText);
-              messageContent = await getNextNode(false, buttonId, from, true, flowId);
+              ({ messageContent, currentNodeId } = await getNextNode(false, buttonId, from, true, flowId));
             }
 
             if (messageContent) {
-              sendReply(messageContent);
+              sendReply(messageContent, flowId, currentNodeId);
             }
 
             await markMessageAsRead(messageId);
