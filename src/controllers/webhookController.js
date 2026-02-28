@@ -133,7 +133,8 @@ async function getNextNode(isFirstMessage, current_node_id, phoneNumber, isButto
       };
 
       sendReply(messageContent, flowId, node?.id);
-      let getNextNodeResponse = await getNextNode(false, node?.node_id, phoneNumber, false, flowId);
+      console.log(false, node?.node_id, phoneNumber, true, flowId, 'ddfdf')
+      let getNextNodeResponse = await getNextNode(false, node?.node_id, phoneNumber, true, flowId);
       console.log(getNextNodeResponse, "message next recuesion")
       return getNextNodeResponse;
     } else if (node.type === 'http') {
