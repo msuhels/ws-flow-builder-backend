@@ -1,9 +1,9 @@
-import { FlowEngine } from '../services/flowEngine.js';
 import supabase from '../config/supabase.js';
 import axios from 'axios';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { storeUserMessage, storeBotMessage } from './conversationController.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -18,42 +18,71 @@ const WHATSAPP_API_URL = `https://graph.facebook.com/v22.0/${PHONE_NUMBER_ID}/me
 const DB_JSON_PATH = path.join(__dirname, '..', 'db.json');
 
 /**
- * Get next node and format for WhatsApp
- * @param {boolean} isFirstMessage - Whether this is the first message
- * @param {string} next_node_id - The ID to search for (node_id or btn_id)
- * @param {string} phoneNumber - The recipient phone number
- * @returns {object} Formatted WhatsApp message payload
+ * Replace placeholders like {{variable.path}} with actual values
  */
-async function getNextNode(isFirstMessage, next_node_id, phoneNumber) {
+function replacePlaceholders(text, variableName, data) {
+  if (!text || typeof text !== 'string') return text;
+
+  const regex = new RegExp(`\\{\\{${variableName}\\.([^}]+)\\}\\}`, 'g');
+
+  return text.replace(regex, (match, path) => {
+    const keys = path.split('.');
+    let value = data;
+
+    for (const key of keys) {
+      if (value && typeof value === 'object' && key in value) {
+        value = value[key];
+      } else {
+        return match;
+      }
+    }
+
+    return value !== undefined ? String(value) : match;
+  });
+}
+
+/**
+ * Get next node and format for WhatsApp (Stateless - no session tracking)
+ */
+async function getNextNode(isFirstMessage, current_node_id, phoneNumber, isButtonClick = false, flowId) {
   try {
     let node;
 
     if (isFirstMessage) {
+      console.log(`🚀 Starting flow - fetching first node`);
       // Get the first node with specific ID
       const { data, error } = await supabase
         .from('nodes')
         .select('*')
-        .eq('id', '4d01c7af-4e22-46ba-82cb-8c710344de29')
+        .eq('flow_id', flowId)
+        .is('previous_node_id', null)
         .maybeSingle();
 
       if (error) throw error;
       node = data;
-    } else {
-      // Search for node where previous_node_id matches the next_node_id
-      const { data, error } = await supabase
+    } else if (isButtonClick) {
+      const { data: nextNode, error: nextError } = await supabase
         .from('nodes')
         .select('*')
-        .eq('previous_node_id', next_node_id)
+        .eq('flow_id', flowId)
+        .eq('previous_node_id', current_node_id)
         .maybeSingle();
 
-      if (error) throw error;
-      node = data;
+      if (nextError) throw nextError;
+      if (!nextNode) {
+        console.error(`❌ Next node not found: ${nextNodeId}`);
+        return { messageContent: null, currentNodeId: null };
+      }
+
+      node = nextNode;
     }
 
     if (!node) {
-      console.log('No next node found, end of flow');
-      return null;
+      console.log(`⛔ No next node found, end of flow`);
+      return { messageContent: null, currentNodeId: null };
     }
+
+    console.log(`📍 Processing node: ${node.id} (${node.type}) - "${node.name}"`);
 
     // Parse properties if it's a string
     const properties = typeof node.properties === 'string'
@@ -64,8 +93,9 @@ async function getNextNode(isFirstMessage, next_node_id, phoneNumber) {
     if (node.type === 'button') {
       // Node has buttons - format as interactive button message
       const buttons = properties?.buttons || [];
+      console.log(`🔘 Button node with ${buttons.length} buttons`);
 
-      return {
+      let messageContent = {
         messaging_product: 'whatsapp',
         to: phoneNumber,
         type: 'interactive',
@@ -85,18 +115,29 @@ async function getNextNode(isFirstMessage, next_node_id, phoneNumber) {
           }
         }
       };
-    } else if (node.type === 'message') {
-      // Simple text message
       return {
+        messageContent,
+        currentNodeId: node?.id || null
+      }
+    } else if (node.type === 'message') {
+      // Simple text message - check if it has buttons
+      const messageText = properties?.label || node.name || 'Hello 👋';
+
+      let messageContent = {
         messaging_product: 'whatsapp',
         to: phoneNumber,
         type: 'text',
         text: {
-          body: properties?.label || node.name || 'Hello 👋 How can I help you?'
+          body: messageText
         }
       };
+
+      sendReply(messageContent, flowId, node?.id);
+      let getNextNodeResponse = await getNextNode(false, node?.node_id, phoneNumber, false, flowId);
+      return getNextNodeResponse;
     } else if (node.type === 'http') {
-      // HTTP Request node - make API call and continue to next node
+      // HTTP Request node - make API call and process next node
+      console.log(`🌐 HTTP node - making API request`);
       try {
         const {
           url,
@@ -109,17 +150,21 @@ async function getNextNode(isFirstMessage, next_node_id, phoneNumber) {
           apiKeyValue,
           body,
           headers,
-          timeout
+          timeout,
+          responseVariable
         } = properties;
 
+        let responseToWhatsapp = null
+
         if (url) {
-          // Parse custom headers
+          console.log(`🌐 Making HTTP ${method || 'GET'} request to: ${url}`);
+
           let customHeaders = {};
           if (headers) {
             try {
               customHeaders = typeof headers === 'string' ? JSON.parse(headers) : headers;
             } catch (e) {
-              console.error('Invalid headers JSON:', e);
+              console.error('❌ Invalid headers JSON:', e);
             }
           }
 
@@ -133,36 +178,103 @@ async function getNextNode(isFirstMessage, next_node_id, phoneNumber) {
             customHeaders[apiKeyHeader] = apiKeyValue;
           }
 
-          // Parse request body
           let requestBody = null;
           if (body && (method === 'POST' || method === 'PUT' || method === 'PATCH')) {
             try {
               requestBody = typeof body === 'string' ? JSON.parse(body) : body;
             } catch (e) {
-              console.error('Invalid body JSON:', e);
+              console.error('❌ Invalid body JSON:', e);
             }
           }
 
           // Make HTTP request
-          console.log(`🌐 Making HTTP ${method || 'GET'} request to: ${url}`);
-          const response = await axios({
+          const httpResponse = await axios({
             method: method || 'GET',
             url: url,
             data: requestBody,
             headers: customHeaders,
             timeout: (timeout || 30) * 1000,
-            validateStatus: () => true // Accept any status code
+            validateStatus: () => true
           });
 
-          console.log(`✅ HTTP request completed with status ${response.status}`);
-          return {
-            messaging_product: 'whatsapp',
-            to: phoneNumber,
-            type: 'text',
-            text: {
-              body: 'API request completed successfully. Continuing to next step...' + (response.data ? `\nResponse: ${JSON.stringify(response.data)}` : '')
+          console.log(`✅ HTTP request completed with status ${httpResponse.status}`);
+
+          // If responseVariable exists, fetch next node and replace placeholders
+          if (responseVariable) {
+            const { data: nextNode, error: nextError } = await supabase
+              .from('nodes')
+              .select('*')
+              .eq('flow_id', flowId)
+              .eq('previous_node_id', node.node_id)
+              .maybeSingle();
+
+            if (nextError) {
+              console.error('❌ Error fetching next node:', nextError);
+            } else if (nextNode) {
+              console.log(`➡️ Found next node: ${nextNode.id} (${nextNode.type})`);
+
+              const nextProperties = typeof nextNode.properties === 'string'
+                ? JSON.parse(nextNode.properties)
+                : nextNode.properties;
+
+              // Replace placeholders in label with API response data
+              if (nextProperties?.label) {
+                const replacedLabel = replacePlaceholders(
+                  nextProperties.label,
+                  responseVariable,
+                  httpResponse.data
+                );
+                console.log(`🔄 Replaced: "${nextProperties.label}" → "${replacedLabel}"`);
+
+                // Return next node message with replaced values
+                if (nextNode.type === 'message') {
+                  responseToWhatsapp = {
+                    messaging_product: 'whatsapp',
+                    to: phoneNumber,
+                    type: 'text',
+                    text: {
+                      body: replacedLabel
+                    }
+                  };
+                } else if (nextNode.type === 'button') {
+                  const buttons = nextProperties?.buttons || [];
+                  responseToWhatsapp = {
+                    messaging_product: 'whatsapp',
+                    to: phoneNumber,
+                    type: 'interactive',
+                    interactive: {
+                      type: 'button',
+                      body: {
+                        text: replacedLabel
+                      },
+                      action: {
+                        buttons: buttons.slice(0, 3).map((btn) => ({
+                          type: 'reply',
+                          reply: {
+                            id: btn.btn_id,
+                            title: btn.text
+                          }
+                        }))
+                      }
+                    }
+                  };
+                }
+              }
             }
-          };
+          }
+        }
+
+        let ifNotNextNode = {
+          messaging_product: 'whatsapp',
+          to: phoneNumber,
+          type: 'text',
+          text: {
+            body: 'Variable not handle'
+          }
+        };
+        return {
+          messageContent: responseToWhatsapp || ifNotNextNode,
+          currentNodeId: responseToWhatsapp ? node?.id : null
         }
       } catch (error) {
         return {
@@ -174,10 +286,35 @@ async function getNextNode(isFirstMessage, next_node_id, phoneNumber) {
             }
           };
         console.error('❌ HTTP request failed:', error.message);
+        let messageContent = {
+          messaging_product: 'whatsapp',
+          to: phoneNumber,
+          type: 'text',
+          text: {
+            body: 'HTTP request failed'
+          }
+        };
+        return {
+          messageContent,
+          currentNodeId: null
+        }
       }
+
+    } else if (node.type === 'input') {
+      const messageText = properties?.label || node.name || 'Hello 👋';
+
+      let messageContent = {
+        messaging_product: 'whatsapp',
+        to: phoneNumber,
+        type: 'text',
+        text: {
+          body: messageText
+        }
+      };
+      return { messageContent, currentNodeId: node?.id || null }
     } else {
       // Default to text message for other types
-      return {
+      let messageContent = {
         messaging_product: 'whatsapp',
         to: phoneNumber,
         type: 'text',
@@ -185,11 +322,14 @@ async function getNextNode(isFirstMessage, next_node_id, phoneNumber) {
           body: properties?.label || node.name || 'Message'
         }
       };
+      return {
+        messageContent,
+        currentNodeId: node?.id || null
+      }
     }
   } catch (error) {
     console.error('Error getting next node:', error);
-    // Return default message on error
-    return {
+    let messageContent = {
       messaging_product: 'whatsapp',
       to: phoneNumber,
       type: 'text',
@@ -197,10 +337,14 @@ async function getNextNode(isFirstMessage, next_node_id, phoneNumber) {
         body: 'Sorry, something went wrong. Please try again.'
       }
     };
+    return {
+      messageContent,
+      currentNodeId: null
+    }
   }
 }
 
-async function sendReply(messageContent) {
+async function sendReply(messageContent, flow_id, node_id) {
   try {
     await axios.post(
       WHATSAPP_API_URL,
@@ -213,6 +357,32 @@ async function sendReply(messageContent) {
       }
     );
     console.log(`✅ Reply sent to ${messageContent.to}`);
+
+    // Store bot message in conversations table
+    const phoneNumber = messageContent.to;
+    let messageText = '';
+
+    // Extract message text based on message type
+    if (messageContent.type === 'text' || messageContent.type === 'input') {
+      messageText = messageContent.text?.body || '';
+    } else if (messageContent.type === 'interactive') {
+      if (messageContent.interactive?.type === 'button') {
+        const bodyText = messageContent.interactive.body?.text || '';
+        const buttons = messageContent.interactive.action?.buttons || [];
+        const buttonTexts = buttons.map(btn => btn.reply?.title).filter(Boolean);
+
+        if (buttonTexts.length > 0) {
+          messageText = `${bodyText}\n\n${buttonTexts.map((text, idx) => `${idx + 1}. ${text}`).join('\n')}`;
+        } else {
+          messageText = bodyText;
+        }
+      }
+    }
+
+    if (messageText && phoneNumber) {
+      await storeBotMessage(phoneNumber, messageText, flow_id, node_id, null, 'sent');
+    }
+
     return true;
   } catch (error) {
     console.error('❌ Error sending reply:', error.response?.data || error.message);
@@ -227,26 +397,21 @@ function storeWebhookData(data) {
   try {
     let dbData = { webhooks: [] };
 
-    // Read existing data if file exists
     if (fs.existsSync(DB_JSON_PATH)) {
       const fileContent = fs.readFileSync(DB_JSON_PATH, 'utf-8');
       dbData = JSON.parse(fileContent);
     }
 
-    // Add new webhook data with timestamp
     dbData.webhooks.push({
       timestamp: new Date().toISOString(),
       data: data
     });
 
-    // Keep only last 100 entries to prevent file from growing too large
     if (dbData.webhooks.length > 100) {
       dbData.webhooks = dbData.webhooks.slice(-100);
     }
 
-    // Write back to file
     fs.writeFileSync(DB_JSON_PATH, JSON.stringify(dbData, null, 2));
-    console.log('✅ Webhook data stored to db.json');
   } catch (error) {
     console.error('❌ Error storing webhook data:', error);
   }
@@ -279,203 +444,6 @@ async function sendTextMessage(to, message) {
 }
 
 /**
- * Send interactive buttons (Products and Services)
- */
-async function sendButtons(to) {
-  try {
-    await axios.post(
-      WHATSAPP_API_URL,
-      {
-        messaging_product: 'whatsapp',
-        to: to,
-        type: 'interactive',
-        interactive: {
-          type: 'button',
-          body: {
-            text: 'Welcome to our company!\nPlease choose one of the options below.'
-          },
-          action: {
-            buttons: [
-              {
-                type: 'reply',
-                reply: {
-                  id: 'products',
-                  title: 'Products'
-                }
-              },
-              {
-                type: 'reply',
-                reply: {
-                  id: 'services',
-                  title: 'Services'
-                }
-              }
-            ]
-          }
-        }
-      },
-      {
-        headers: {
-          'Authorization': `Bearer ${WHATSAPP_TOKEN}`,
-          'Content-Type': 'application/json'
-        }
-      }
-    );
-    console.log(`✅ Buttons sent to ${to}`);
-  } catch (error) {
-    console.error('❌ Error sending buttons:', error.response?.data || error.message);
-  }
-}
-
-/**
- * Send product selection buttons
- */
-async function sendProductButtons(to) {
-  try {
-    await axios.post(
-      WHATSAPP_API_URL,
-      {
-        messaging_product: 'whatsapp',
-        to: to,
-        type: 'interactive',
-        interactive: {
-          type: 'button',
-          body: {
-            text: 'Here are our products:\n\nPlease select a product:'
-          },
-          action: {
-            buttons: [
-              {
-                type: 'reply',
-                reply: {
-                  id: 'product_a',
-                  title: 'Product A'
-                }
-              },
-              {
-                type: 'reply',
-                reply: {
-                  id: 'product_b',
-                  title: 'Product B'
-                }
-              },
-              {
-                type: 'reply',
-                reply: {
-                  id: 'product_c',
-                  title: 'Product C'
-                }
-              }
-            ]
-          }
-        }
-      },
-      {
-        headers: {
-          'Authorization': `Bearer ${WHATSAPP_TOKEN}`,
-          'Content-Type': 'application/json'
-        }
-      }
-    );
-    console.log(`✅ Product buttons sent to ${to}`);
-  } catch (error) {
-    console.error('❌ Error sending product buttons:', error.response?.data || error.message);
-  }
-}
-
-/**
- * Send service selection buttons
- */
-async function sendServiceButtons(to) {
-  try {
-    await axios.post(
-      WHATSAPP_API_URL,
-      {
-        messaging_product: 'whatsapp',
-        to: to,
-        type: 'interactive',
-        interactive: {
-          type: 'button',
-          body: {
-            text: 'Here are our services:\n\nPlease select a service:'
-          },
-          action: {
-            buttons: [
-              {
-                type: 'reply',
-                reply: {
-                  id: 'service_a',
-                  title: 'Service A'
-                }
-              },
-              {
-                type: 'reply',
-                reply: {
-                  id: 'service_b',
-                  title: 'Service B'
-                }
-              },
-              {
-                type: 'reply',
-                reply: {
-                  id: 'service_c',
-                  title: 'Service C'
-                }
-              }
-            ]
-          }
-        }
-      },
-      {
-        headers: {
-          'Authorization': `Bearer ${WHATSAPP_TOKEN}`,
-          'Content-Type': 'application/json'
-        }
-      }
-    );
-
-    // Send Service D as a separate button message (WhatsApp limitation: max 3 buttons)
-    setTimeout(async () => {
-      await axios.post(
-        WHATSAPP_API_URL,
-        {
-          messaging_product: 'whatsapp',
-          to: to,
-          type: 'interactive',
-          interactive: {
-            type: 'button',
-            body: {
-              text: 'Or choose this service:'
-            },
-            action: {
-              buttons: [
-                {
-                  type: 'reply',
-                  reply: {
-                    id: 'service_d',
-                    title: 'Service D'
-                  }
-                }
-              ]
-            }
-          }
-        },
-        {
-          headers: {
-            'Authorization': `Bearer ${WHATSAPP_TOKEN}`,
-            'Content-Type': 'application/json'
-          }
-        }
-      );
-    }, 1000);
-
-    console.log(`✅ Service buttons sent to ${to}`);
-  } catch (error) {
-    console.error('❌ Error sending service buttons:', error.response?.data || error.message);
-  }
-}
-
-/**
  * Mark message as read
  */
 async function markMessageAsRead(messageId) {
@@ -495,7 +463,49 @@ async function markMessageAsRead(messageId) {
       }
     );
   } catch (error) {
-    // Silently fail - marking as read is not critical
+    // Silently fail
+  }
+}
+
+/**
+ * Handle template status update webhook
+ */
+async function handleTemplateStatusUpdate(webhookData) {
+  try {
+    console.log('📋 Processing template status update webhook');
+
+    const entry = webhookData.entry?.[0];
+    const change = entry?.changes?.[0];
+    const value = change?.value;
+
+    if (change?.field !== 'message_template_status_update') {
+      return;
+    }
+
+    const { event, message_template_id } = value;
+
+    const { data: template } = await supabase
+      .from('templates')
+      .select('*')
+      .eq('meta_template_id', String(message_template_id))
+      .maybeSingle();
+
+    if (!template) {
+      console.log(`⚠️ Template not found: ${message_template_id}`);
+      return;
+    }
+
+    await supabase
+      .from('templates')
+      .update({
+        status: event,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', template.id);
+
+    console.log(`✅ Template status updated: ${event}`);
+  } catch (error) {
+    console.error('❌ Error handling template status update:', error);
   }
 }
 
@@ -505,137 +515,89 @@ async function markMessageAsRead(messageId) {
 export const handleWhatsAppWebhook = async (req, res) => {
   try {
     const body = req.body;
-    // Store webhook data to db.json
-    // storeWebhookData(body);
+    let flowId = '2ef6b284-6a6b-4e7a-927a-497ee29d6cb3';
 
-    // Check if this is a WhatsApp message event
+    storeWebhookData(body);
+
     if (body.object === 'whatsapp_business_account') {
-      // Loop through entries
+      const firstChange = body.entry?.[0]?.changes?.[0];
+      if (firstChange?.field === 'message_template_status_update') {
+        await handleTemplateStatusUpdate(body);
+        return res.sendStatus(200);
+      }
+
       for (const entry of body.entry) {
         const changes = entry.changes;
 
         for (const change of changes) {
           const value = change.value;
 
-          // Check if there are messages
           if (value.messages && value.messages.length > 0) {
             const message = value.messages[0];
             const from = message.from;
             const messageType = message.type;
             const messageId = message.id;
-            let messageContent = null;
+            let { messageContent, currentNodeId } = { messageContent: null, currentNodeId: null };
 
             console.log(`📩 Received message from ${from}, type: ${messageType}`);
 
-            // Handle different message types
             if (messageType === 'text') {
-              // User sent a text message - send welcome buttons
               console.log(`💬 Text message: ${message.text.body}`);
+              await storeUserMessage(from, message.text.body);
 
               if (message.text.body.toLowerCase().includes('hi') || message.text.body.toLowerCase().includes('hello')) {
-                messageContent = await getNextNode(true, null, from);
+                ({ messageContent, currentNodeId } = await getNextNode(true, null, from, false, flowId));
               } else {
-                await sendTextMessage(from, "Sorry, I didn't understand that. Please type 'Hi' or 'Hello' to see options.");
+                const { data: lastMessage, error } = await supabase
+                  .from('conversations')
+                  .select('*')
+                  .eq('phone_number', from)
+                  .eq('flow_id', flowId)
+                  .eq('message_type', 'bot')
+                  .order('created_at', { ascending: false })
+                  .limit(1)
+                  .maybeSingle();
+
+                if (error) {
+                  console.error('❌ Error fetching last bot conversation:', error);
+                  await sendTextMessage(from, "Sorry, I didn't understand that. Please type 'Hi' or 'Hello' to see options.");
+                }
+
+                const { data: nextNode, error: nextError } = await supabase
+                  .from('nodes')
+                  .select('*')
+                  .eq('id', lastMessage.node_id)
+                  .maybeSingle();
+
+                if (nextNode?.type == 'input') {
+                  ({ messageContent, currentNodeId } = await getNextNode(false, nextNode?.node_id, from, true, flowId));
+                } else {
+                  await sendTextMessage(from, "Sorry, I didn't understand that. Please type 'Hi' or 'Hello' to see options.");
+                }
+
               }
-
-
-
-
-
-
-              // await sendButtons(from);
-
-              // // Also process through flow engine
-              // const normalizedEvent = {
-              //   type: 'message',
-              //   from: from,
-              //   messageId: messageId,
-              //   text: message.text.body
-              // };
-
-              // FlowEngine.handleIncomingEvent(normalizedEvent).catch(err => {
-              //   console.error("Error processing webhook event:", err);
-              // });
-
             } else if (messageType === 'interactive') {
-              // User clicked a button
               const buttonId = message.interactive.button_reply.id;
-              messageContent = await getNextNode(false, buttonId, from);
+              const buttonText = message.interactive.button_reply.title;
+              console.log(`� Button clicked: ${buttonId}`);
 
-
-
-
-              // console.log(`🔘 Button clicked: ${buttonId}`);
-
-              // // Handle main menu button clicks
-              // if (buttonId === 'products') {
-              //   await sendProductButtons(from);
-              // } else if (buttonId === 'services') {
-              //   await sendServiceButtons(from);
-              // }
-              // // Handle product selections
-              // else if (buttonId === 'product_a') {
-              //   await sendTextMessage(from, 'You have selected Product A, we will contact you shortly.');
-              // } else if (buttonId === 'product_b') {
-              //   await sendTextMessage(from, 'You have selected Product B, we will contact you shortly.');
-              // } else if (buttonId === 'product_c') {
-              //   await sendTextMessage(from, 'You have selected Product C, we will contact you shortly.');
-              // }
-              // // Handle service selections
-              // else if (buttonId === 'service_a') {
-              //   await sendTextMessage(from, 'You have selected Service A, we will contact you shortly.');
-              // } else if (buttonId === 'service_b') {
-              //   await sendTextMessage(from, 'You have selected Service B, we will contact you shortly.');
-              // } else if (buttonId === 'service_c') {
-              //   await sendTextMessage(from, 'You have selected Service C, we will contact you shortly.');
-              // } else if (buttonId === 'service_d') {
-              //   await sendTextMessage(from, 'You have selected Service D, we will contact you shortly.');
-              // }
-
-              // // Also process through flow engine
-              // const normalizedEvent = {
-              //   type: 'button_reply',
-              //   from: from,
-              //   messageId: messageId,
-              //   payload: buttonId,
-              //   text: message.interactive.button_reply.title
-              // };
-
-              // FlowEngine.handleIncomingEvent(normalizedEvent).catch(err => {
-              //   console.error("Error processing webhook event:", err);
-              // });
+              await storeUserMessage(from, buttonText);
+              ({ messageContent, currentNodeId } = await getNextNode(false, buttonId, from, true, flowId));
             }
+
             if (messageContent) {
-              // storeWebhookData(messageContent);
-              sendReply(messageContent);
+              sendReply(messageContent, flowId, currentNodeId);
             }
-            // Mark message as read
+
             await markMessageAsRead(messageId);
           }
-
-          // Handle status updates
-          // if (value.statuses && value.statuses.length > 0) {
-          //   const status = value.statuses[0];
-          //   const normalizedEvent = {
-          //     type: 'status',
-          //     from: status.recipient_id,
-          //     messageId: status.id,
-          //     status: status.status
-          //   };
-
-          //   FlowEngine.handleIncomingEvent(normalizedEvent).catch(err => {
-          //     console.error("Error processing status event:", err);
-          //   });
-          // }
         }
       }
     }
 
-    // Always respond with 200 to acknowledge receipt
     res.sendStatus(200);
   } catch (error) {
     console.error('❌ Error processing webhook:', error);
-    // Still send 200 to prevent Meta from retrying
     res.sendStatus(200);
   }
 };
@@ -656,8 +618,7 @@ export const getWebhookData = (req, res) => {
     console.error('❌ Error reading webhook data:', error);
     res.status(500).json({
       success: false,
-      error: 'Failed to read webhook data',
-      message: error.message
+      error: 'Failed to read webhook data'
     });
   }
 };
@@ -677,8 +638,7 @@ export const clearWebhookData = (req, res) => {
     console.error('❌ Error clearing webhook data:', error);
     res.status(500).json({
       success: false,
-      error: 'Failed to clear webhook data',
-      message: error.message
+      error: 'Failed to clear webhook data'
     });
   }
 };
@@ -710,160 +670,87 @@ export const verifyWebhook = (req, res) => {
 export const triggerFlow = async (req, res) => {
   try {
     const { flowId } = req.params;
-    const { phoneNumber, data } = req.body;
+    const body = req.body;
 
-    if (!phoneNumber) {
-      res.status(400).json({
-        success: false,
-        error: 'phoneNumber is required'
-      });
-      return;
+    if (body.object === 'whatsapp_business_account') {
+      const firstChange = body.entry?.[0]?.changes?.[0];
+      if (firstChange?.field === 'message_template_status_update') {
+        await handleTemplateStatusUpdate(body);
+        return res.sendStatus(200);
+      }
+
+      for (const entry of body.entry) {
+        const changes = entry.changes;
+
+        for (const change of changes) {
+          const value = change.value;
+
+          if (value.messages && value.messages.length > 0) {
+            const message = value.messages[0];
+            const from = message.from;
+            const messageType = message.type;
+            const messageId = message.id;
+            let { messageContent, currentNodeId } = { messageContent: null, currentNodeId: null };
+
+            console.log(`📩 Received message from ${from}, type: ${messageType}`);
+
+            if (messageType === 'text') {
+              console.log(`💬 Text message: ${message.text.body}`);
+              await storeUserMessage(from, message.text.body);
+
+              if (message.text.body.toLowerCase().includes('hi') || message.text.body.toLowerCase().includes('hello')) {
+                ({ messageContent, currentNodeId } = await getNextNode(true, null, from, false, flowId));
+              } else {
+                const { data: lastMessage, error } = await supabase
+                  .from('conversations')
+                  .select('*')
+                  .eq('phone_number', from)
+                  .eq('flow_id', flowId)
+                  .eq('message_type', 'bot')
+                  .order('created_at', { ascending: false })
+                  .limit(1)
+                  .maybeSingle();
+
+                if (error) {
+                  console.error('❌ Error fetching last bot conversation:', error);
+                  await sendTextMessage(from, "Sorry, I didn't understand that. Please type 'Hi' or 'Hello' to see options.");
+                }
+
+                const { data: nextNode, error: nextError } = await supabase
+                  .from('nodes')
+                  .select('*')
+                  .eq('id', lastMessage.node_id)
+                  .maybeSingle();
+
+                if (nextNode?.type == 'input') {
+                  ({ messageContent, currentNodeId } = await getNextNode(false, nextNode?.node_id, from, true, flowId));
+                } else {
+                  await sendTextMessage(from, "Sorry, I didn't understand that. Please type 'Hi' or 'Hello' to see options.");
+                }
+
+              }
+            } else if (messageType === 'interactive') {
+              const buttonId = message.interactive.button_reply.id;
+              const buttonText = message.interactive.button_reply.title;
+              console.log(`🔘 Button clicked: ${buttonId}`);
+
+              await storeUserMessage(from, buttonText);
+              ({ messageContent, currentNodeId } = await getNextNode(false, buttonId, from, true, flowId));
+            }
+
+            if (messageContent) {
+              sendReply(messageContent, flowId, currentNodeId);
+            }
+
+            await markMessageAsRead(messageId);
+          }
+        }
+      }
     }
 
-    console.log(`[Webhook Trigger] Flow ${flowId} triggered for ${phoneNumber}`);
-
-    // Start the flow directly
-    await FlowEngine.startFlow(phoneNumber, flowId, data || {});
-
-    // Small delay to ensure message is logged
-    await new Promise(resolve => setTimeout(resolve, 100));
-
-    // Get session info
-    const session = await FlowEngine.getSession(phoneNumber);
-
-    // Get the last message sent to this phone number
-    const { data: lastMessage } = await supabase
-      .from('message_logs')
-      .select('*')
-      .eq('phone_number', phoneNumber)
-      .order('sent_at', { ascending: false })
-      .limit(1)
-      .maybeSingle();
-
-    console.log('[Webhook Trigger] Last message:', lastMessage);
-
-    res.status(200).json({
-      success: true,
-      message: 'Flow triggered successfully',
-      flowId: flowId,
-      phoneNumber: phoneNumber,
-      session: session ? {
-        id: session.id,
-        flowId: session.flow_id,
-        currentNodeId: session.current_node_id,
-        status: session.status,
-        context: session.context
-      } : null,
-      botResponse: lastMessage ? {
-        content: lastMessage.content,
-        type: lastMessage.message_type,
-        sentAt: lastMessage.sent_at
-      } : null
-    });
-
+    res.sendStatus(200);
   } catch (error) {
-    console.error('[Webhook Trigger] Error:', error);
-    res.status(500).json({
-      success: false,
-      error: error.message
-    });
-  }
-};
-
-/**
- * Test Webhook Endpoint
- */
-export const testWebhook = async (req, res) => {
-  try {
-    const { phoneNumber, type, text, buttonId, listId } = req.body;
-
-    if (!phoneNumber) {
-      res.status(400).json({
-        success: false,
-        error: 'phoneNumber is required'
-      });
-      return;
-    }
-
-    let normalizedEvent = {
-      from: phoneNumber,
-      messageId: `test_${Date.now()}`,
-    };
-
-    // Build event based on type
-    switch (type) {
-      case 'text':
-      case 'message':
-        normalizedEvent.type = 'message';
-        normalizedEvent.text = text || 'test message';
-        break;
-
-      case 'button':
-      case 'button_reply':
-        normalizedEvent.type = 'button_reply';
-        normalizedEvent.payload = buttonId || 'test_btn_0';
-        normalizedEvent.text = text || 'Button clicked';
-        break;
-
-      case 'list':
-      case 'list_reply':
-        normalizedEvent.type = 'list_reply';
-        normalizedEvent.payload = listId || 'test_list_0';
-        normalizedEvent.text = text || 'List item selected';
-        break;
-
-      default:
-        normalizedEvent.type = 'message';
-        normalizedEvent.text = text || 'test';
-    }
-
-    console.log('[Webhook Test] Simulating event:', normalizedEvent);
-
-    // Process the event
-    await FlowEngine.handleIncomingEvent(normalizedEvent);
-
-    // Small delay to ensure message is logged
-    await new Promise(resolve => setTimeout(resolve, 100));
-
-    // Get session info for response
-    const session = await FlowEngine.getSession(phoneNumber);
-
-    // Get the last message sent to this phone number
-    const { data: lastMessage } = await supabase
-      .from('message_logs')
-      .select('*')
-      .eq('phone_number', phoneNumber)
-      .order('sent_at', { ascending: false })
-      .limit(1)
-      .maybeSingle();
-
-    console.log('[Webhook Test] Last message:', lastMessage);
-
-    res.status(200).json({
-      success: true,
-      message: 'Test webhook processed',
-      event: normalizedEvent,
-      session: session ? {
-        id: session.id,
-        flowId: session.flow_id,
-        currentNodeId: session.current_node_id,
-        status: session.status,
-        context: session.context,
-        executionTrace: session.execution_trace
-      } : null,
-      botResponse: lastMessage ? {
-        content: lastMessage.content,
-        type: lastMessage.message_type,
-        sentAt: lastMessage.sent_at
-      } : null
-    });
-
-  } catch (error) {
-    console.error('[Webhook Test] Error:', error);
-    res.status(500).json({
-      success: false,
-      error: error.message,
-      stack: error.stack
-    });
+    console.error('❌ Error processing webhook:', error);
+    res.sendStatus(200);
   }
 };

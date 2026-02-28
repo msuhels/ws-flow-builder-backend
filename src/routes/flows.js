@@ -6,6 +6,7 @@ import {
   getFlowById,
   updateFlow,
   deleteFlow,
+  getFlowVariables,
 } from '../controllers/flowController.js';
 
 const router = Router();
@@ -27,6 +28,12 @@ router.post('/', protect, createFlow);
  * GET /api/flows/:id
  */
 router.get('/:id', protect, getFlowById);
+
+/**
+ * Get Available Variables for a Flow
+ * GET /api/flows/:id/variables
+ */
+router.get('/:id/variables', protect, getFlowVariables);
 
 /**
  * Update Flow

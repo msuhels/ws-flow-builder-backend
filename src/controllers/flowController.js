@@ -192,3 +192,70 @@ export const deleteFlow = async (req, res) => {
     res.status(500).json({ success: false, message: 'Server Error' });
   }
 };
+
+/**
+ * Get Available Variables for a Flow
+ * Scans all nodes in the flow to find variables that can be used
+ */
+export const getFlowVariables = async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    // Get all nodes in the flow
+    const { data: nodes, error } = await supabase
+      .from('nodes')
+      .select('*')
+      .eq('flow_id', id);
+
+    if (error) throw error;
+
+    const variables = [];
+
+    // Scan nodes for variables
+    if (nodes) {
+      nodes.forEach(node => {
+        const properties = node.properties || {};
+
+        // Input nodes create variables
+        if (node.type === 'input' && properties.variableName) {
+          variables.push({
+            name: properties.variableName,
+            type: properties.inputType || 'text',
+            description: `User input from: ${node.name || 'Input node'}`,
+            source: 'input',
+            nodeId: node.id
+          });
+        }
+
+        // HTTP nodes create variables
+        if (node.type === 'http' && properties.responseVariable) {
+          variables.push({
+            name: properties.responseVariable,
+            type: 'object',
+            description: `API response data from: ${properties.label || properties.url || 'HTTP request'}`,
+            source: 'http',
+            nodeId: node.id
+          });
+        }
+      });
+    }
+
+    // Add default system variables
+    const systemVariables = [
+      { name: 'phone_number', type: 'string', description: 'User phone number', source: 'system' },
+      { name: 'customer_name', type: 'string', description: 'Customer name', source: 'system' },
+      { name: 'email', type: 'string', description: 'Email address', source: 'system' }
+    ];
+
+    res.status(200).json({
+      success: true,
+      data: {
+        flowId: id,
+        variables: [...systemVariables, ...variables]
+      }
+    });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ success: false, message: 'Server Error' });
+  }
+};

@@ -1,0 +1,352 @@
+import supabase from '../config/supabase.js';
+import axios from 'axios';
+
+// In-memory cache for last user interaction times
+// Structure: { phoneNumber: { timestamp: Date, cachedAt: Date } }
+const lastInteractionCache = new Map();
+const CACHE_TTL = 5 * 60 * 1000; // 5 minutes cache TTL
+
+/**
+ * Get last user interaction time from cache or database
+ */
+const getLastUserInteraction = async (phoneNumber) => {
+  const now = new Date();
+  const cached = lastInteractionCache.get(phoneNumber);
+
+  // Check if cache is valid (exists and not expired)
+  if (cached && (now - cached.cachedAt) < CACHE_TTL) {
+    console.log('[Cache] Using cached last interaction for:', phoneNumber);
+    return cached.timestamp;
+  }
+
+  // Cache miss or expired - fetch from database
+  console.log('[Cache] Fetching last interaction from DB for:', phoneNumber);
+  const { data: lastUserMessage, error } = await supabase
+    .from('conversations')
+    .select('created_at')
+    .eq('phone_number', phoneNumber)
+    .eq('direction', 'received')
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (error) {
+    console.error('[Cache] Error fetching last interaction:', error);
+    return null;
+  }
+
+  const timestamp = lastUserMessage ? new Date(lastUserMessage.created_at) : null;
+
+  // Update cache
+  if (timestamp) {
+    lastInteractionCache.set(phoneNumber, {
+      timestamp,
+      cachedAt: now
+    });
+    console.log('[Cache] Cached last interaction for:', phoneNumber);
+  }
+
+  return timestamp;
+};
+
+/**
+ * Update cache when user sends a message (called from webhook/storeUserMessage)
+ */
+export const updateLastInteractionCache = (phoneNumber) => {
+  const now = new Date();
+  lastInteractionCache.set(phoneNumber, {
+    timestamp: now,
+    cachedAt: now
+  });
+  console.log('[Cache] Updated cache for new user message:', phoneNumber);
+};
+
+/**
+ * Clear cache for a specific phone number (useful for testing or manual invalidation)
+ */
+export const clearInteractionCache = (phoneNumber) => {
+  if (phoneNumber) {
+    lastInteractionCache.delete(phoneNumber);
+    console.log('[Cache] Cleared cache for:', phoneNumber);
+  } else {
+    lastInteractionCache.clear();
+    console.log('[Cache] Cleared all cache');
+  }
+};
+
+/**
+ * Get all conversations (list of users with last message)
+ */
+export const getConversations = async (req, res) => {
+  try {
+    const { data, error } = await supabase
+      .from('conversation_list')
+      .select('*')
+      .order('last_message_at', { ascending: false });
+
+    if (error) throw error;
+
+    res.status(200).json({ 
+      success: true, 
+      data: data || [] 
+    });
+  } catch (error) {
+    console.error('Error fetching conversations:', error);
+    res.status(500).json({ 
+      success: false, 
+      message: 'Failed to fetch conversations' 
+    });
+  }
+};
+
+/**
+ * Get messages for a specific phone number
+ */
+export const getConversationMessages = async (req, res) => {
+  try {
+    const { phoneNumber } = req.params;
+
+    console.log('[Conversation] Fetching messages for:', phoneNumber);
+
+    if (!phoneNumber) {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'Phone number is required' 
+      });
+    }
+
+    const { data, error } = await supabase
+      .from('conversations')
+      .select('*')
+      .eq('phone_number', phoneNumber)
+      .order('created_at', { ascending: true });
+
+    if (error) {
+      console.error('[Conversation] Error fetching messages:', error);
+      throw error;
+    }
+
+    console.log('[Conversation] Found messages:', data?.length || 0);
+    console.log('[Conversation] Message types:', data?.map(m => m.message_type).join(', '));
+
+    res.status(200).json({ 
+      success: true, 
+      data: data || [] 
+    });
+  } catch (error) {
+    console.error('[Conversation] Error fetching conversation messages:', error);
+    res.status(500).json({ 
+      success: false, 
+      message: 'Failed to fetch messages',
+      error: error.message
+    });
+  }
+};
+
+/**
+ * Send manual message from conversation chat
+ */
+export const sendConversationMessage = async (req, res) => {
+  try {
+    const { phoneNumber, message } = req.body;
+
+    console.log('[Conversation] Send message request:', { phoneNumber, message });
+
+    if (!phoneNumber || !message) {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'Phone number and message are required' 
+      });
+    }
+
+    // Check 24-hour messaging window (WhatsApp Policy)
+    const lastMessageTime = await getLastUserInteraction(phoneNumber);
+
+    if (lastMessageTime) {
+      const currentTime = new Date();
+      const hoursDifference = (currentTime - lastMessageTime) / (1000 * 60 * 60);
+
+      console.log('[Conversation] Last user message time:', lastMessageTime);
+      console.log('[Conversation] Hours since last message:', hoursDifference.toFixed(2));
+
+      // WhatsApp allows messaging within 24 hours of last user interaction
+      if (hoursDifference > 24) {
+        return res.status(403).json({ 
+          success: false, 
+          message: 'Cannot send message: 24-hour messaging window expired',
+          reason: 'whatsapp_policy',
+          details: `Last user interaction was ${Math.floor(hoursDifference)} hours ago. You can only send template messages or wait for the user to message you first.`,
+          lastInteraction: lastMessageTime,
+          hoursSinceLastMessage: hoursDifference
+        });
+      }
+    } else {
+      // No previous user message found - cannot send regular message
+      console.log('[Conversation] No previous user message found');
+      return res.status(403).json({ 
+        success: false, 
+        message: 'Cannot send message: No previous interaction from user',
+        reason: 'whatsapp_policy',
+        details: 'You can only send template messages to users who have not interacted with you yet, or wait for them to message you first.',
+        lastInteraction: null,
+        hoursSinceLastMessage: null
+      });
+    }
+
+    // Get WhatsApp API Config from environment variables
+    const whatsappToken = process.env.WHATSAPP_TOKEN;
+    const phoneNumberId = process.env.PHONE_NUMBER_ID;
+
+    console.log('[Conversation] API Config:', { 
+      hasToken: !!whatsappToken, 
+      hasPhoneNumberId: !!phoneNumberId 
+    });
+
+    if (!whatsappToken || !phoneNumberId) {
+      console.error('[Conversation] Missing API config in environment variables:', { 
+        hasToken: !!whatsappToken, 
+        hasPhoneNumberId: !!phoneNumberId 
+      });
+      return res.status(400).json({ 
+        success: false, 
+        message: 'WhatsApp API not configured. Please check environment variables (WHATSAPP_TOKEN, PHONE_NUMBER_ID).' 
+      });
+    }
+
+    const version = 'v17.0';
+    const url = `https://graph.facebook.com/${version}/${phoneNumberId}/messages`;
+
+    // Prepare WhatsApp payload
+    const waPayload = {
+      messaging_product: 'whatsapp',
+      recipient_type: 'individual',
+      to: phoneNumber,
+      type: 'text',
+      text: { body: message }
+    };
+
+    let waResponseId = '';
+    let status = 'sent';
+
+    // Send to WhatsApp
+    try {
+      console.log('[Conversation] Sending to WhatsApp:', { to: phoneNumber, url });
+      const response = await axios.post(url, waPayload, {
+        headers: { 
+          'Authorization': `Bearer ${whatsappToken}`,
+          'Content-Type': 'application/json'
+        }
+      });
+      
+      waResponseId = response.data.messages?.[0]?.id;
+      status = 'sent';
+      console.log('[Conversation] WhatsApp response:', { waResponseId, status });
+    } catch (apiError) {
+      console.error('[Conversation] WhatsApp API Error:', apiError.response?.data || apiError.message);
+      status = 'failed';
+      
+      // Return error details
+      return res.status(500).json({ 
+        success: false, 
+        message: 'Failed to send message via WhatsApp',
+        error: apiError.response?.data || apiError.message
+      });
+    }
+
+    // Store in conversations table
+    const { data: conversationData, error: conversationError } = await supabase
+      .from('conversations')
+      .insert({
+        phone_number: phoneNumber,
+        message: message,
+        message_type: 'manual',
+        direction: 'sent',
+        status: status,
+        wati_message_id: waResponseId
+      })
+      .select()
+      .single();
+
+    if (conversationError) {
+      console.error('[Conversation] Error storing conversation:', conversationError);
+    } else {
+      console.log('[Conversation] Message stored:', conversationData?.id);
+    }
+
+    if (status === 'sent') {
+      res.status(200).json({ 
+        success: true, 
+        message: 'Message sent successfully',
+        data: conversationData
+      });
+    } else {
+      res.status(500).json({ 
+        success: false, 
+        message: 'Failed to send message via WhatsApp' 
+      });
+    }
+
+  } catch (error) {
+    console.error('[Conversation] Error sending message:', error);
+    res.status(500).json({ 
+      success: false, 
+      message: 'Server error',
+      error: error.message
+    });
+  }
+};
+
+/**
+ * Store bot message in conversations (called from flowEngine)
+ */
+export const storeBotMessage = async (phoneNumber, message, flowId, nodeId, waMessageId, status = 'sent') => {
+  try {
+    console.log('[Conversation] Storing bot message:', { 
+      phoneNumber, 
+      messageLength: message?.length, 
+      flowId, 
+      nodeId, 
+      waMessageId, 
+      status 
+    });
+    
+    const result = await supabase.from('conversations').insert({
+      phone_number: phoneNumber,
+      message: typeof message === 'string' ? message : JSON.stringify(message),
+      message_type: 'bot',
+      direction: 'sent',
+      status: status,
+      wati_message_id: waMessageId,
+      flow_id: flowId,
+      node_id: nodeId
+    });
+    
+    if (result.error) {
+      console.error('[Conversation] Error storing bot message:', result.error);
+    } else {
+      console.log('[Conversation] ✓ Bot message stored successfully');
+    }
+  } catch (error) {
+    console.error('[Conversation] Error storing bot message:', error);
+  }
+};
+
+/**
+ * Store user message in conversations (called from webhook)
+ */
+export const storeUserMessage = async (phoneNumber, message) => {
+  try {
+    await supabase.from('conversations').insert({
+      phone_number: phoneNumber,
+      message: message,
+      message_type: 'user',
+      direction: 'received',
+      status: 'received'
+    });
+    
+    // Update cache with new user interaction
+    updateLastInteractionCache(phoneNumber);
+  } catch (error) {
+    console.error('Error storing user message:', error);
+  }
+};

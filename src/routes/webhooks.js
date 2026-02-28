@@ -4,8 +4,7 @@ import {
   getWebhookData,
   clearWebhookData,
   verifyWebhook,
-  triggerFlow,
-  testWebhook,
+  triggerFlow
 } from '../controllers/webhookController.js';
 
 const router = Router();
@@ -40,10 +39,5 @@ router.get('/whatsapp', verifyWebhook);
  */
 router.post('/trigger/:flowId', triggerFlow);
 
-/**
- * Test Webhook Endpoint
- * POST /api/webhooks/test
- */
-router.post('/test', testWebhook);
 
 export default router;
