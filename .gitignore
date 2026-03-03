@@ -5,8 +5,6 @@ yarn-debug.log*
 yarn-error.log*
 
 # Environment variables
-.env
-.env.local
 .env.*.local
 
 # Build output
@@ -37,3 +35,7 @@ coverage/
 # Temporary files
 *.tmp
 .temp/
+config.bat
+branch_structure.json
+temp_auto_push.bat
+temp_interactive_push.bat

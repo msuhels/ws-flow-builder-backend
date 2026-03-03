@@ -515,7 +515,7 @@ async function handleTemplateStatusUpdate(webhookData) {
 export const handleWhatsAppWebhook = async (req, res) => {
   try {
     const body = req.body;
-    let flowId = '2ef6b284-6a6b-4e7a-927a-497ee29d6cb3';
+    let flowId = '426b74df-5a06-4be1-a64d-8c00bca8b76f';
 
     storeWebhookData(body);
 
